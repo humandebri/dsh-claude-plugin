@@ -121,6 +121,21 @@ The current route supports Standard-style text, image, and DSH tool turns.
 Treat it as pre-release until the authenticated tool, replay, and WebUI gates in
 the implementation plan pass.
 
+## WebUI end-to-end test
+
+The keyless lane installs the packed checkout into an isolated current-DSH Web
+profile and drives the real UI in Chromium:
+
+```bash
+npx --no-install playwright install chromium
+npm run test:web
+```
+
+After `claude auth login`, run `npm run test:web:live` for text, tool,
+cancellation, multi-turn, and cold-restart coverage. See the
+[WebUI end-to-end guide](docs/web-e2e.md) for the evidence boundary, sanitized
+report schema, browser checklist, and exact manual-service commands.
+
 ## Tool authority and correlation
 
 Only tool names under `mcp__dsh__*` are allowed inside Claude Code. Tool schemas

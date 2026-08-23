@@ -60,6 +60,8 @@
     "smoke:claude": "npm run build && node scripts/smoke-claude.mjs",
     "test": "vitest run",
     "test:profile": "npm run build && node scripts/profile-install-e2e.mjs",
+    "test:web": "npm run build && node scripts/web-e2e.mjs",
+    "test:web:live": "npm run build && node scripts/web-e2e.mjs --live",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -86,6 +88,7 @@
     "@types/node": "^22.20.0",
     "@vitest/coverage-v8": "^4.1.8",
     "oxlint": "1.76.0",
+    "playwright": "1.61.1",
     "pnpm": "10.34.5",
     "prettier": "3.9.6",
     "publint": "0.3.24",
