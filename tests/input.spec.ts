@@ -1,6 +1,6 @@
 import { describe, expect, it } from 'vitest'
 import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
-import { LiveInputCursor } from '../src/input.js'
+import { assertSdkUserInput, LiveInputCursor } from '../src/input.js'
 
 function message(
   id: string,
@@ -51,20 +51,23 @@ describe('live SDK input cursor', () => {
     ).toHaveLength(1)
   })
 
-  it('fails closed on cold, divergent, or mismatched assistant history', () => {
+  it('degrades cold history and fails closed on divergent live history', () => {
     const cold = new LiveInputCursor()
-    expect(() =>
-      cold.prepare(
-        options([
-          message('old', 'assistant', 'old', {
-            kind: 'model',
-            provider: 'claude-code',
-            model: 'default',
-          }),
-          message('new', 'user', 'new'),
-        ]),
-      ),
-    ).toThrow(/cannot reconstruct/)
+    const degraded = cold.prepareStep(
+      options([
+        message('old', 'assistant', 'old', {
+          kind: 'model',
+          provider: 'claude-code',
+          model: 'default',
+        }),
+        message('new', 'user', 'new'),
+      ]),
+    )
+    expect(degraded).toMatchObject({
+      kind: 'prompt',
+      start: { mode: 'degraded' },
+      messages: [{ message: { role: 'user' }, shouldQuery: true }],
+    })
 
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'first')]
@@ -96,6 +99,31 @@ describe('live SDK input cursor', () => {
         ]),
       ),
     ).toThrow(/exact assistant response/)
+  })
+
+  it('never reconstructs history with assistant-role SDK input', () => {
+    const prepared = new LiveInputCursor().prepareStep(
+      options([
+        message('old', 'assistant', 'old answer', {
+          kind: 'model',
+          provider: 'claude-code',
+          model: 'default',
+        }),
+        message('new', 'user', 'continue'),
+      ]),
+    )
+    expect(prepared.kind).toBe('prompt')
+    if (prepared.kind !== 'prompt') throw new Error('fixture expected a prompt plan')
+    for (const input of prepared.messages) {
+      expect(input).toMatchObject({ type: 'user', message: { role: 'user' } })
+      expect(() => assertSdkUserInput(input)).not.toThrow()
+    }
+    expect(() =>
+      assertSdkUserInput({
+        type: 'assistant',
+        message: { role: 'assistant', content: [] },
+      } as never),
+    ).toThrowError(expect.objectContaining({ code: 'CLAUDE_PROTOCOL_ERROR' }))
   })
 
   it.each([
@@ -236,6 +264,9 @@ describe('live SDK input cursor', () => {
       model: 'default',
     })
     expect(() => cursor.prepare(options([...first, mirrored]))).toThrow(/requires new user content/)
+    expect(() => new LiveInputCursor().prepare(options([mirrored]))).toThrow(
+      /requires new user content/,
+    )
     expect(() =>
       cursor.prepare(
         options([

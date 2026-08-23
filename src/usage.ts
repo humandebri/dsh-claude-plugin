@@ -47,6 +47,10 @@ export function sumModelUsage(
 export class UsageTracker {
   #previous: UsageSnapshot = ZERO_USAGE
 
+  get snapshot(): UsageSnapshot {
+    return this.#previous
+  }
+
   delta(usage: Readonly<Record<string, Partial<ModelUsage>>> | undefined): TokenUsage {
     const current = sumModelUsage(usage)
     const delta: TokenUsage = {

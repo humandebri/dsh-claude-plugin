@@ -179,7 +179,7 @@ function user(): Message {
   }
 }
 
-function assistantTool(): Message {
+function assistantTool(replayState?: unknown): Message {
   return {
     id: 'a1' as never,
     role: 'assistant',
@@ -191,7 +191,12 @@ function assistantTool(): Message {
         arguments: '{"path":"/fixture"}',
       },
     ],
-    source: { kind: 'model', provider: 'claude-code', model: 'default' },
+    source: {
+      kind: 'model',
+      provider: 'claude-code',
+      model: 'default',
+      ...(replayState === undefined ? {} : { replayState }),
+    },
   }
 }
 
@@ -258,11 +263,21 @@ describe('DSH-owned MCP pause and resume', () => {
     const adapter = new ClaudeCodeAdapter(config, manager)
 
     const first = await collect(adapter.stream(request([user()])))
-    expect(first.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+    expect(first.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'tool-calls' },
+      replayState: {
+        response: { kind: 'dsh-claude-plugin/replay', phase: 'awaiting-tools' },
+      },
+    })
     expect(first.filter((chunk) => chunk.type === 'tool-call-delta')).not.toHaveLength(0)
 
     const second = await collect(adapter.stream(request([user(), assistantTool(), toolResult()])))
-    expect(second.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(second.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: { response: { kind: 'dsh-claude-plugin/replay', phase: 'settled' } },
+    })
     expect(
       second
         .filter((chunk) => chunk.type === 'text-delta')
@@ -284,6 +299,74 @@ describe('DSH-owned MCP pause and resume', () => {
     })
     await manager.dispose()
     expect(queries[0]?.closed).toBe(true)
+  })
+
+  it('does not idle-evict a query while DSH owns its pending tool boundary', async () => {
+    vi.useFakeTimers()
+    try {
+      const queries: ToolQuery[] = []
+      const factory: ClaudeQueryFactory = (queryRequest) => {
+        const query = new ToolQuery(queryRequest)
+        queries.push(query)
+        return query
+      }
+      const subprocess = {
+        resolveExecutable: vi.fn(() => Promise.resolve('/usr/local/bin/claude')),
+      } as unknown as SubprocessRuntime
+      const config = resolveConfig({ sessionIdleMs: 100, toolRoundTripTimeoutMs: 1_000 })
+      const manager = new BridgeManager(subprocess, config, factory)
+      const adapter = new ClaudeCodeAdapter(config, manager)
+
+      const first = await collect(adapter.stream(request([user()])))
+      expect(first.at(-1)).toMatchObject({
+        type: 'finish',
+        reason: { kind: 'tool-calls' },
+      })
+      await vi.advanceTimersByTimeAsync(101)
+      expect(manager.activeBridgeCount).toBe(1)
+      expect(queries[0]?.closed).toBe(false)
+
+      const second = await collect(adapter.stream(request([user(), assistantTool(), toolResult()])))
+      expect(second.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+      expect(queries).toHaveLength(1)
+      await manager.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('removes a timed-out parked query and accepts a later clean session request', async () => {
+    vi.useFakeTimers()
+    try {
+      const queries: ToolQuery[] = []
+      const factory: ClaudeQueryFactory = (queryRequest) => {
+        const query = new ToolQuery(queryRequest)
+        queries.push(query)
+        return query
+      }
+      const subprocess = {
+        resolveExecutable: vi.fn(() => Promise.resolve('/usr/local/bin/claude')),
+      } as unknown as SubprocessRuntime
+      const config = resolveConfig({ sessionIdleMs: 1_000, toolRoundTripTimeoutMs: 100 })
+      const manager = new BridgeManager(subprocess, config, factory)
+      const adapter = new ClaudeCodeAdapter(config, manager)
+
+      await collect(adapter.stream(request([user()])))
+      expect(manager.activeBridgeCount).toBe(1)
+      await vi.advanceTimersByTimeAsync(101)
+      expect(manager.activeBridgeCount).toBe(0)
+      expect(queries[0]?.closed).toBe(true)
+
+      const recovered = await collect(adapter.stream(request([user()])))
+      expect(recovered.at(-1)).toMatchObject({
+        type: 'finish',
+        reason: { kind: 'tool-calls' },
+      })
+      expect(queries).toHaveLength(2)
+      await manager.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
   })
 
   it('cancels parked MCP handlers when the DSH continuation is aborted', async () => {
@@ -311,5 +394,52 @@ describe('DSH-owned MCP pause and resume', () => {
     })
     expect(queries[0]?.closed).toBe(true)
     await manager.dispose()
+  })
+
+  it('fails explicitly instead of reconstructing a crashed in-flight MCP handler', async () => {
+    const firstQueries: ToolQuery[] = []
+    const firstFactory: ClaudeQueryFactory = (queryRequest) => {
+      const query = new ToolQuery(queryRequest)
+      firstQueries.push(query)
+      return query
+    }
+    const subprocess = {
+      resolveExecutable: vi.fn(() => Promise.resolve('/usr/local/bin/claude')),
+    } as unknown as SubprocessRuntime
+    const config = resolveConfig()
+    const firstManager = new BridgeManager(subprocess, config, firstFactory)
+    const firstAdapter = new ClaudeCodeAdapter(config, firstManager)
+    const first = await collect(firstAdapter.stream(request([user()])))
+    const finish = first.find((chunk) => chunk.type === 'finish')
+    if (finish?.type !== 'finish') throw new Error('fixture expected a terminal tool boundary')
+    expect(finish.replayState).toBeDefined()
+    await firstManager.dispose()
+
+    const coldFactory = vi.fn<ClaudeQueryFactory>((queryRequest) => new ToolQuery(queryRequest))
+    const coldManager = new BridgeManager(subprocess, config, coldFactory)
+    const coldAdapter = new ClaudeCodeAdapter(config, coldManager)
+    const chunks = await collect(
+      coldAdapter.stream(request([user(), assistantTool(finish.replayState), toolResult()])),
+    )
+    expect(chunks).toEqual([
+      {
+        type: 'finish',
+        reason: {
+          kind: 'error',
+          failure: expect.objectContaining({
+            code: 'CLAUDE_IN_FLIGHT_RECOVERY_UNSUPPORTED',
+          }),
+        },
+      },
+    ])
+    expect(coldFactory).not.toHaveBeenCalled()
+
+    const recovered = await collect(coldAdapter.stream(request([user()])))
+    expect(recovered.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'tool-calls' },
+    })
+    expect(coldFactory).toHaveBeenCalledOnce()
+    await coldManager.dispose()
   })
 })

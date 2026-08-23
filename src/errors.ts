@@ -8,6 +8,7 @@ export const CLAUDE_ERROR_CODES = {
   invalidConfig: 'CLAUDE_INVALID_CONFIG',
   invalidModel: 'CLAUDE_INVALID_MODEL',
   invalidProvider: 'CLAUDE_INVALID_PROVIDER',
+  inFlightRecoveryUnsupported: 'CLAUDE_IN_FLIGHT_RECOVERY_UNSUPPORTED',
   modelNotFound: 'CLAUDE_MODEL_NOT_FOUND',
   protocolError: 'CLAUDE_PROTOCOL_ERROR',
   rateLimited: 'CLAUDE_RATE_LIMITED',
@@ -47,6 +48,14 @@ export function abortError(cause?: unknown): ClaudePluginError {
 
 export function unsupportedInput(message: string): ClaudePluginError {
   return claudeError(CLAUDE_ERROR_CODES.unsupportedInput, message)
+}
+
+export function coldReplayUnsupported(message: string, cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.coldReplayUnsupported, message, cause)
+}
+
+export function inFlightRecoveryUnsupported(message: string): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.inFlightRecoveryUnsupported, message)
 }
 
 export function protocolError(message: string, cause?: unknown): ClaudePluginError {
