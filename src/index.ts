@@ -10,7 +10,14 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
-import { invalidConfig, transportNotImplemented } from './errors.js'
+import { BridgeManager } from './bridge.js'
+import {
+  abortError,
+  ClaudePluginError,
+  invalidConfig,
+  protocolError,
+  transportError,
+} from './errors.js'
 import {
   modelCatalog,
   PROVIDER_ID,
@@ -22,6 +29,11 @@ import {
 
 export * from './errors.js'
 export * from './models.js'
+export * from './bridge.js'
+export * from './input.js'
+export * from './output.js'
+export * from './process.js'
+export * from './usage.js'
 
 export const name = 'dsh-claude-plugin'
 export const inject = ['llm', 'subprocess']
@@ -149,9 +161,18 @@ export function resolveConfig(input: Config = {}): ResolvedConfig {
   return Object.freeze(resolved)
 }
 
-/** Provider metadata and gated stream entry point for the scaffold milestone. */
+function normalizeTransportFailure(error: unknown, signal?: AbortSignal): ClaudePluginError {
+  if (error instanceof ClaudePluginError) return error
+  if (signal?.aborted === true) return abortError(error)
+  return transportError('unexpected Claude transport failure', error)
+}
+
+/** Provider metadata and managed Claude Agent SDK stream entry point. */
 export class ClaudeCodeAdapter extends LlmAdapter {
-  constructor(readonly config: ResolvedConfig) {
+  constructor(
+    readonly config: ResolvedConfig,
+    readonly bridges: BridgeManager,
+  ) {
     super()
   }
 
@@ -170,15 +191,30 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
     const model = resolveClaudeModel(options.model, this.config.defaultModel)
-    const error = transportNotImplemented(model)
-    yield {
-      type: 'finish',
-      reason: { kind: 'error', failure: error.failure },
+    let finished = false
+    try {
+      for await (const chunk of this.bridges.stream(options, model)) {
+        if (chunk.type === 'finish') finished = true
+        yield chunk
+      }
+      if (!finished) throw protocolError('Claude bridge completed without a terminal finish')
+    } catch (error: unknown) {
+      if (finished) return
+      const normalized = normalizeTransportFailure(error, options.signal)
+      yield {
+        type: 'finish',
+        reason:
+          normalized.code === 'CLAUDE_ABORTED'
+            ? { kind: 'aborted', failure: normalized.failure }
+            : { kind: 'error', failure: normalized.failure },
+      }
     }
   }
 }
 
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved = resolveConfig(config)
-  ctx.llm.registerAdapter([PROVIDER_ID], new ClaudeCodeAdapter(resolved))
+  const bridges = new BridgeManager(ctx.subprocess, resolved)
+  ctx.effect(() => () => bridges.dispose(), 'dsh-claude-plugin: bridge teardown')
+  ctx.llm.registerAdapter([PROVIDER_ID], new ClaudeCodeAdapter(resolved, bridges))
 }
