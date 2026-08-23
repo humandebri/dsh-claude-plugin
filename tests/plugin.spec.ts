@@ -1,5 +1,11 @@
 import { describe, expect, it } from 'vitest'
 import { Context } from '@deepseek-ai/cordis'
+import AttachmentStore from '@deepseek-ai/dsh-attachment'
+import type {
+  ImageAttachmentRef,
+  SaveImageAttachment,
+  StoredImageAttachment,
+} from '@deepseek-ai/dsh-attachment'
 import LlmRuntime from '@deepseek-ai/dsh-llm'
 import SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
 import type {
@@ -25,17 +31,41 @@ class FakeSubprocessRuntime extends SubprocessRuntime {
   }
 }
 
+class FakeAttachmentRuntime extends AttachmentStore {
+  override readonly imageLimits = {
+    maxImageBytes: 8 * 1_024 * 1_024,
+    maxImagesPerMessage: 20,
+    maxMessageImageBytes: 20 * 1_024 * 1_024,
+    maxImagePixels: 64_000_000,
+    maxImageDimension: 8_000,
+    mediaTypes: ['image/png', 'image/jpeg', 'image/webp', 'image/gif'] as const,
+  }
+
+  override validateImage(_input: SaveImageAttachment): Promise<void> {
+    return Promise.resolve()
+  }
+
+  override saveImage(_input: SaveImageAttachment): Promise<ImageAttachmentRef> {
+    return Promise.reject(new Error('not exercised by plugin registration'))
+  }
+
+  override readImage(_ref: ImageAttachmentRef): Promise<StoredImageAttachment> {
+    return Promise.reject(new Error('not exercised by plugin registration'))
+  }
+}
+
 async function setup(): Promise<Context> {
   const ctx = new Context()
   await ctx.plugin(LlmRuntime)
   await ctx.plugin(FakeSubprocessRuntime)
+  await ctx.plugin(FakeAttachmentRuntime)
   return ctx
 }
 
 describe('DSH plugin registration', () => {
-  it('declares both required services', () => {
+  it('declares all required services', () => {
     expect(claudePlugin.name).toBe('dsh-claude-plugin')
-    expect(claudePlugin.inject).toEqual(['llm', 'subprocess'])
+    expect(claudePlugin.inject).toEqual(['llm', 'subprocess', 'attachments'])
   })
 
   it('registers and disposes the Claude provider with its model catalog', async () => {

@@ -11,6 +11,7 @@ import {
   ToolSchema as McpToolSchema,
   type Tool as McpTool,
 } from '@modelcontextprotocol/sdk/types.js'
+import { ClaudeContentEncoder } from './content.js'
 import { toolProtocolError, type ClaudePluginError } from './errors.js'
 import { canonicalToolJson, PendingTools } from './pending-tools.js'
 
@@ -74,8 +75,12 @@ export class DshToolServer {
   #catalog: Catalog = prepareCatalog([], 0)
   #closed = false
 
-  constructor(timeoutMs: number, onFailure: (error: ClaudePluginError) => void) {
-    this.pending = new PendingTools(timeoutMs, onFailure)
+  constructor(
+    timeoutMs: number,
+    onFailure: (error: ClaudePluginError) => void,
+    encoder = new ClaudeContentEncoder(),
+  ) {
+    this.pending = new PendingTools(timeoutMs, onFailure, encoder)
     this.instance.server.setRequestHandler(ListToolsRequestSchema, () => ({
       tools: [...this.#catalog.tools],
     }))
@@ -129,8 +134,8 @@ export class DshToolServer {
     return this.pending.assertBoundary(calls, generation, signal)
   }
 
-  resolve(results: readonly ToolResultBlock[]): void {
-    this.pending.resolveBatch(results)
+  resolve(results: readonly ToolResultBlock[], signal?: AbortSignal): Promise<void> {
+    return this.pending.resolveBatch(results, signal)
   }
 
   async close(error = toolProtocolError('DSH MCP tool server was closed')): Promise<void> {

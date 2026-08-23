@@ -1,6 +1,10 @@
 import type { CallToolResult } from '@modelcontextprotocol/sdk/types.js'
-import type { CallId, ContentBlock, ToolCallBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { CallId, ToolCallBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import { ClaudeContentEncoder } from './content.js'
 import { ClaudePluginError, toolProtocolError, toolTimeout } from './errors.js'
+import { canonicalToolJson } from './json.js'
+
+export { canonicalToolJson } from './json.js'
 
 export const MCP_HANDLER_REGISTRATION_TIMEOUT_MS = 5_000
 
@@ -28,40 +32,6 @@ interface PendingEntry extends PendingToolSnapshot {
   readonly timer: ReturnType<typeof setTimeout>
 }
 
-function normalizedJson(value: unknown, path: string, ancestors = new WeakSet<object>()): unknown {
-  if (value === null || typeof value === 'string' || typeof value === 'boolean') return value
-  if (typeof value === 'number' && Number.isFinite(value)) return value
-  if (typeof value !== 'object') {
-    throw toolProtocolError(`tool JSON at ${path} contains a non-JSON value`)
-  }
-  if (ancestors.has(value)) throw toolProtocolError(`tool JSON at ${path} contains a cycle`)
-  ancestors.add(value)
-  let output: unknown
-  if (Array.isArray(value)) {
-    output = value.map((entry, index) => normalizedJson(entry, `${path}[${index}]`, ancestors))
-  } else {
-    const prototype = Object.getPrototypeOf(value)
-    if (prototype !== Object.prototype && prototype !== null) {
-      throw toolProtocolError(`tool JSON at ${path} must contain only plain objects`)
-    }
-    const record: Record<string, unknown> = Object.create(null) as Record<string, unknown>
-    for (const key of Object.keys(value).sort()) {
-      record[key] = normalizedJson(
-        (value as Record<string, unknown>)[key],
-        `${path}.${key}`,
-        ancestors,
-      )
-    }
-    output = record
-  }
-  ancestors.delete(value)
-  return output
-}
-
-export function canonicalToolJson(value: unknown): string {
-  return JSON.stringify(normalizedJson(value, '$'))
-}
-
 function parsedArguments(raw: string): Readonly<Record<string, unknown>> {
   let parsed: unknown
   try {
@@ -75,22 +45,12 @@ function parsedArguments(raw: string): Readonly<Record<string, unknown>> {
   return parsed as Readonly<Record<string, unknown>>
 }
 
-function mcpContent(content: readonly ContentBlock[]): CallToolResult['content'] {
-  return content.map((block) => {
-    if (block.type !== 'text') {
-      throw toolProtocolError(
-        `DSH tool result content type ${JSON.stringify(block.type)} is not enabled in this milestone`,
-      )
-    }
-    return { type: 'text' as const, text: block.text }
-  })
-}
-
-export function toMcpToolResult(result: ToolResultBlock): CallToolResult {
-  return {
-    content: mcpContent(result.content),
-    ...(result.isError === undefined ? {} : { isError: result.isError }),
-  }
+export function toMcpToolResult(
+  result: ToolResultBlock,
+  encoder = new ClaudeContentEncoder(),
+  signal?: AbortSignal,
+): Promise<CallToolResult> {
+  return encoder.toolResult(result, signal)
 }
 
 /** Correlates Claude MCP handlers with the exact DSH-visible tool calls and results. */
@@ -103,6 +63,7 @@ export class PendingTools {
   constructor(
     readonly timeoutMs: number,
     readonly onFailure: (error: ClaudePluginError) => void,
+    readonly encoder = new ClaudeContentEncoder(),
   ) {}
 
   get size(): number {
@@ -279,11 +240,11 @@ export class PendingTools {
     }
   }
 
-  resolveBatch(results: readonly ToolResultBlock[]): void {
+  async resolveBatch(results: readonly ToolResultBlock[], signal?: AbortSignal): Promise<void> {
     if (this.#failure !== undefined) throw this.#failure
     try {
       const resolved = new Set<string>()
-      const completions: Array<{ entry: PendingEntry; result: CallToolResult }> = []
+      const planned: Array<{ entry: PendingEntry; result: ToolResultBlock }> = []
       for (const result of results) {
         const id = String(result.toolCallId)
         if (resolved.has(id)) throw toolProtocolError(`DSH repeated tool result ${id}`)
@@ -296,11 +257,18 @@ export class PendingTools {
               : `DSH supplied an unknown tool result ${id}`,
           )
         }
-        completions.push({ entry, result: toMcpToolResult(result) })
+        planned.push({ entry, result })
       }
       if (resolved.size !== this.#pending.size) {
         throw toolProtocolError('DSH omitted one or more pending Claude tool results')
       }
+      this.encoder.assertToolResults(results)
+      const completions = await Promise.all(
+        planned.map(async ({ entry, result }) => ({
+          entry,
+          result: await toMcpToolResult(result, this.encoder, signal),
+        })),
+      )
       for (const { entry } of completions) {
         this.#pending.delete(entry.id)
         this.#cleanup(entry)

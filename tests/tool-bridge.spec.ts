@@ -155,6 +155,10 @@ class ToolQuery implements ClaudeQuery {
     return Promise.resolve()
   }
 
+  applyFlagSettings(): Promise<void> {
+    return Promise.resolve()
+  }
+
   interrupt(): Promise<void> {
     return Promise.resolve()
   }

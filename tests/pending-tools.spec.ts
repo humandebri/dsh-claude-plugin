@@ -30,7 +30,7 @@ function fixture(timeoutMs = 10_000) {
 afterEach(() => vi.useRealTimers())
 
 describe('pending DSH tool correlation', () => {
-  it('canonicalizes JSON and rejects values that cannot cross the tool protocol', () => {
+  it('canonicalizes JSON and rejects values that cannot cross the tool protocol', async () => {
     expect(canonicalToolJson({ z: 1, a: [{ y: true, x: null }] })).toBe(
       '{"a":[{"x":null,"y":true}],"z":1}',
     )
@@ -44,15 +44,15 @@ describe('pending DSH tool correlation', () => {
     cyclic.self = cyclic
     expect(() => canonicalToolJson(cyclic)).toThrow(/cycle/)
     const { isError: _isError, ...withoutIsError } = result('a')
-    expect(toMcpToolResult(withoutIsError)).toEqual({
+    expect(await toMcpToolResult(withoutIsError)).toEqual({
       content: [{ type: 'text', text: 'a' }],
     })
-    expect(() =>
+    await expect(
       toMcpToolResult({
         ...result('a'),
         content: [{ type: 'reasoning', text: 'hidden' }],
       }),
-    ).toThrow(/not enabled/)
+    ).rejects.toThrow(/unsupported/)
   })
 
   it('accepts multi-tool boundaries and out-of-order DSH completion without swapping results', async () => {
@@ -73,7 +73,7 @@ describe('pending DSH tool correlation', () => {
       [call('b', 'read', '{"path":"/b"}'), call('a', 'read', '{"path":"/a"}')],
       1,
     )
-    pending.resolveBatch([result('b', 'B', true), result('a', 'A')])
+    await pending.resolveBatch([result('b', 'B', true), result('a', 'A')])
     await expect(first).resolves.toMatchObject({ content: [{ text: 'A' }], isError: false })
     await expect(second).resolves.toMatchObject({ content: [{ text: 'B' }], isError: true })
   })
@@ -125,7 +125,7 @@ describe('pending DSH tool correlation', () => {
         arguments: {},
         generation: 1,
       })
-      expect(() => current.pending.resolveBatch(results)).toThrow(pattern)
+      await expect(current.pending.resolveBatch(results)).rejects.toThrow(pattern)
       await expect(promise, label).rejects.toThrow()
     }
 
@@ -136,9 +136,9 @@ describe('pending DSH tool correlation', () => {
       arguments: {},
       generation: 1,
     })
-    stale.pending.resolveBatch([result('a')])
+    await stale.pending.resolveBatch([result('a')])
     await completed
-    expect(() => stale.pending.resolveBatch([result('a')])).toThrow(/stale or duplicate/)
+    await expect(stale.pending.resolveBatch([result('a')])).rejects.toThrow(/stale or duplicate/)
   })
 
   it('times out and rejects every parked handler with one stable failure', async () => {
@@ -193,7 +193,7 @@ describe('pending DSH tool correlation', () => {
       generation: 1,
     })
     await boundary
-    delayed.pending.resolveBatch([result('late')])
+    await delayed.pending.resolveBatch([result('late')])
     await expect(parked).resolves.toMatchObject({ content: [{ text: 'late' }] })
 
     const staggered = fixture()
@@ -218,7 +218,7 @@ describe('pending DSH tool correlation', () => {
       generation: 1,
     })
     await multiBoundary
-    staggered.pending.resolveBatch([result('a'), result('b')])
+    await staggered.pending.resolveBatch([result('a'), result('b')])
     await Promise.all([first, second])
 
     vi.useFakeTimers()

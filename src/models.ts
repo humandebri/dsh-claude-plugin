@@ -1,9 +1,49 @@
-import type { LlmModelInfo, LlmResolvedModelInfo } from '@deepseek-ai/dsh-llm'
+import {
+  ReasoningEffortId,
+  type LlmModelInfo,
+  type LlmResolvedModelInfo,
+} from '@deepseek-ai/dsh-llm'
+import type { EffortLevel } from '@anthropic-ai/claude-agent-sdk'
 import { CLAUDE_ERROR_CODES, ClaudePluginError } from './errors.js'
 
 export const PROVIDER_ID = 'claude-code'
 export const PROVIDER_NAME = 'Claude Code'
 export const BUILTIN_MODEL_ALIASES = ['default', 'sonnet', 'opus', 'haiku'] as const
+export const CLAUDE_REASONING_EFFORTS = ['low', 'medium', 'high'] as const
+
+export type ClaudeReasoningEffort = (typeof CLAUDE_REASONING_EFFORTS)[number]
+
+export function resolveClaudeEffort(value: unknown): EffortLevel | undefined {
+  if (value === undefined) return undefined
+  if (typeof value !== 'string') {
+    throw new ClaudePluginError(
+      CLAUDE_ERROR_CODES.invalidModel,
+      'Claude reasoning effort must be a string',
+    )
+  }
+  const effort = value
+  if (!(CLAUDE_REASONING_EFFORTS as readonly string[]).includes(effort)) {
+    throw new ClaudePluginError(
+      CLAUDE_ERROR_CODES.invalidModel,
+      `Claude reasoning effort must be one of ${CLAUDE_REASONING_EFFORTS.join(', ')}`,
+    )
+  }
+  return effort as ClaudeReasoningEffort
+}
+
+function reasoningInfo(): NonNullable<LlmResolvedModelInfo['reasoning']> {
+  return Object.freeze({
+    efforts: Object.freeze(
+      CLAUDE_REASONING_EFFORTS.map((id) =>
+        Object.freeze({
+          id: ReasoningEffortId(id),
+          name: id[0]!.toUpperCase() + id.slice(1),
+          description: `${id} Claude adaptive-thinking effort`,
+        }),
+      ),
+    ),
+  })
+}
 
 function hasControlCharacter(value: string): boolean {
   for (const character of value) {
@@ -71,7 +111,7 @@ export function modelCatalog(defaultModel: string): readonly LlmModelInfo[] {
       id === 'default'
         ? `Resolves to the configured Claude model ${resolvedDefault}`
         : `Claude Code ${id} alias`,
-    inputModalities: ['text'],
+    inputModalities: ['text', 'image'],
   }))
   return Object.freeze(entries.map((entry) => Object.freeze(entry)))
 }
@@ -97,6 +137,7 @@ export function resolvedModelInfo(
       id === claudeModel
         ? `Claude Code model ${claudeModel}`
         : `Claude Code alias resolving to ${claudeModel}`,
-    inputModalities: ['text'],
+    inputModalities: ['text', 'image'],
+    reasoning: reasoningInfo(),
   }
 }

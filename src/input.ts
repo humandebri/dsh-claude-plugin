@@ -1,6 +1,7 @@
 import { cwd as processCwd } from 'node:process'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ContentBlock, GenerateOptions, Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import { ClaudeContentEncoder } from './content.js'
 import { CLAUDE_ERROR_CODES, claudeError, protocolError, unsupportedInput } from './errors.js'
 import { PROVIDER_ID } from './models.js'
 import { planColdStart } from './replay.js'
@@ -16,28 +17,6 @@ function messageEqual(left: Message, right: Message): boolean {
     JSON.stringify(left.source) === JSON.stringify(right.source) &&
     contentEqual(left.content, right.content)
   )
-}
-
-function userMessage(message: Message): SDKUserMessage {
-  if (message.role !== 'user') {
-    throw unsupportedInput(`only user messages can be submitted to the live Claude input stream`)
-  }
-  const content = message.content.map((block) => {
-    if (block.type !== 'text') {
-      throw unsupportedInput(
-        `message ${JSON.stringify(String(message.id))} contains unsupported ${JSON.stringify(block.type)} content`,
-      )
-    }
-    return { type: 'text' as const, text: block.text }
-  })
-  if (content.length === 0) {
-    throw unsupportedInput(`message ${JSON.stringify(String(message.id))} has no text content`)
-  }
-  return {
-    type: 'user',
-    message: { role: 'user', content },
-    parent_tool_use_id: null,
-  }
 }
 
 export interface CommittedAssistant {
@@ -87,11 +66,8 @@ function toolResult(message: Message): ToolResultBlock {
     throw unsupportedInput('a Claude tool boundary accepts only DSH tool-result messages')
   }
   const result = message.content[0]
-  if (
-    String(result.toolCallId) !== String(message.source.callId) ||
-    result.content.some((block) => block.type !== 'text')
-  ) {
-    throw unsupportedInput('DSH tool-result message correlation or content is unsupported')
+  if (String(result.toolCallId) !== String(message.source.callId)) {
+    throw unsupportedInput('DSH tool-result message correlation is unsupported')
   }
   return result
 }
@@ -101,7 +77,12 @@ export class LiveInputCursor {
   #prefix: readonly Message[] = []
   #assistant: CommittedAssistant | undefined
 
-  prepareStep(options: GenerateOptions, control: PrepareStepOptions = {}): LiveInputPlan {
+  constructor(readonly encoder = new ClaudeContentEncoder()) {}
+
+  async prepareStep(
+    options: GenerateOptions,
+    control: PrepareStepOptions = {},
+  ): Promise<LiveInputPlan> {
     if (options.temperature !== undefined) {
       throw unsupportedInput('Claude Code does not expose DSH temperature control')
     }
@@ -111,10 +92,6 @@ export class LiveInputCursor {
     if ((options.stop?.length ?? 0) > 0) {
       throw unsupportedInput('Claude Code does not expose DSH stop sequences')
     }
-    if (options.reasoningEffort !== undefined) {
-      throw unsupportedInput('Claude reasoning effort selection is not enabled in this milestone')
-    }
-
     let offset = 0
     let start: ClaudeStartPlan | undefined
     if (this.#prefix.length > 0) {
@@ -167,12 +144,7 @@ export class LiveInputCursor {
         return {
           kind: 'prompt',
           messages: [
-            {
-              type: 'user',
-              message: { role: 'user', content: [{ type: 'text', text: cold.text }] },
-              parent_tool_use_id: null,
-              shouldQuery: true,
-            },
+            await this.encoder.degradedMessage(options.messages, cold.text, options.signal),
           ],
           start: { mode: 'degraded' },
         }
@@ -194,7 +166,10 @@ export class LiveInputCursor {
     if (this.#assistant?.content.some((block) => block.type === 'tool-call') === true) {
       return { kind: 'tool-results', results: pending.map(toolResult) }
     }
-    const sdkMessages = pending.map(userMessage)
+    this.encoder.assertMessages(pending)
+    const sdkMessages = await Promise.all(
+      pending.map((message) => this.encoder.userMessage(message, options.signal)),
+    )
     for (const message of sdkMessages.slice(0, -1)) message.shouldQuery = false
     sdkMessages.at(-1)!.shouldQuery = true
     return {
@@ -204,8 +179,8 @@ export class LiveInputCursor {
     }
   }
 
-  prepare(options: GenerateOptions): SDKUserMessage[] {
-    const plan = this.prepareStep(options)
+  async prepare(options: GenerateOptions): Promise<SDKUserMessage[]> {
+    const plan = await this.prepareStep(options)
     if (plan.kind !== 'prompt') {
       throw unsupportedInput('tool results must resume the live Claude MCP call')
     }

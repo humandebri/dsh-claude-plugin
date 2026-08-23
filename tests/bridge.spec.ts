@@ -1,9 +1,11 @@
 import { describe, expect, it, vi } from 'vitest'
 import type { SDKMessage, SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
+import type { ImageAttachmentRef } from '@deepseek-ai/dsh-attachment'
 import type { GenerateOptions, Message, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
 import {
   BridgeManager,
+  type AttachmentReader,
   ClaudeCodeAdapter,
   type ClaudeQuery,
   type ClaudeQueryFactory,
@@ -146,6 +148,7 @@ class FakeQuery implements ClaudeQuery {
   readonly output = new AsyncQueue<SDKMessage>()
   readonly inputs: SDKUserMessage[] = []
   readonly models: string[] = []
+  readonly efforts: Array<string | null | undefined> = []
   closed = false
   readonly consumed: Promise<void>
 
@@ -181,6 +184,11 @@ class FakeQuery implements ClaudeQuery {
     return Promise.resolve()
   }
 
+  applyFlagSettings(settings: { effortLevel?: string | null }): Promise<void> {
+    this.efforts.push(settings.effortLevel)
+    return Promise.resolve()
+  }
+
   interrupt(): Promise<void> {
     return Promise.resolve()
   }
@@ -198,6 +206,7 @@ class FakeQuery implements ClaudeQuery {
 function harness(
   onTurn: (query: FakeQuery, turn: number, queryIndex: number) => Promise<void> | void,
   config = resolveConfig(),
+  attachments?: AttachmentReader,
 ) {
   const requests: ClaudeQueryRequest[] = []
   const queries: FakeQuery[] = []
@@ -212,7 +221,7 @@ function harness(
   }
   const resolveExecutable = vi.fn(() => Promise.resolve('/usr/local/bin/claude'))
   const subprocess = { resolveExecutable } as unknown as SubprocessRuntime
-  const manager = new BridgeManager(subprocess, config, queryFactory)
+  const manager = new BridgeManager(subprocess, config, queryFactory, attachments)
   const adapter = new ClaudeCodeAdapter(config, manager)
   return { adapter, manager, queries, requests, resolveExecutable }
 }
@@ -220,7 +229,11 @@ function harness(
 describe('per-session Claude bridge', () => {
   it('starts an isolated SDK query and streams one complete text turn', async () => {
     const fixture = harness((query) => query.emit(textTurn('hello', 7, 5)))
-    const chunks = await collect(fixture.adapter.stream(request([user('u1', 'hi')], 'session-a')))
+    const chunks = await collect(
+      fixture.adapter.stream(
+        request([user('u1', 'hi')], 'session-a', { reasoningEffort: 'high' as never }),
+      ),
+    )
     expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toHaveLength(5)
     expect(chunks.at(-1)).toMatchObject({
       type: 'finish',
@@ -238,6 +251,7 @@ describe('per-session Claude bridge', () => {
       managedSettings: { disableAllHooks: true },
       mcpServers: { dsh: expect.objectContaining({ type: 'sdk', name: 'dsh' }) },
       model: 'sonnet',
+      effort: 'high',
       pathToClaudeCodeExecutable: '/usr/local/bin/claude',
       permissionMode: 'dontAsk',
       persistSession: true,
@@ -254,7 +268,66 @@ describe('per-session Claude bridge', () => {
     await fixture.manager.dispose()
   })
 
-  it('reuses context, changes model between turns, and subtracts cumulative usage', async () => {
+  it('resolves a durable DSH image into the live SDK prompt without changing history', async () => {
+    const attachment: ImageAttachmentRef = {
+      attachmentId: 'sha256:bridge-image' as never,
+      mediaType: 'image/png',
+      bytes: 4,
+      width: 1,
+      height: 1,
+    }
+    const readImageRequest = vi.fn(async () => ({
+      variantId: 'variant:bridge-image' as never,
+      attachment,
+      data: Uint8Array.from([0x89, 0x50, 0x4e, 0x47]),
+      mediaType: 'image/png' as const,
+      bytes: 4,
+      width: 1,
+      height: 1,
+      depth: 'uchar' as const,
+      space: 'srgb' as const,
+      hasAlpha: true,
+    }))
+    const attachments: AttachmentReader = {
+      imageLimits: {
+        maxImageBytes: 8 * 1_024 * 1_024,
+        maxImagesPerMessage: 20,
+        maxMessageImageBytes: 20 * 1_024 * 1_024,
+        maxImagePixels: 64_000_000,
+        maxImageDimension: 8_000,
+        mediaTypes: ['image/png'],
+      },
+      readImageRequest,
+    }
+    const fixture = harness(
+      (query) => query.emit(textTurn('seen', 2, 1)),
+      resolveConfig(),
+      attachments,
+    )
+    const imageMessage: Message = {
+      id: 'image-message' as never,
+      role: 'user',
+      source: { kind: 'user' },
+      content: [
+        { type: 'text', text: 'describe' },
+        { type: 'image', attachment },
+      ],
+    }
+    const chunks = await collect(fixture.adapter.stream(request([imageMessage], 'image-session')))
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(readImageRequest).toHaveBeenCalledOnce()
+    expect(fixture.queries[0]?.inputs[0]?.message.content).toEqual([
+      { type: 'text', text: 'describe' },
+      {
+        type: 'image',
+        source: { type: 'base64', media_type: 'image/png', data: 'iVBORw==' },
+      },
+    ])
+    expect(imageMessage.content[1]).toEqual({ type: 'image', attachment })
+    await fixture.manager.dispose()
+  })
+
+  it('reuses context, changes model and effort between turns, and subtracts cumulative usage', async () => {
     const fixture = harness((query, turn) => {
       query.emit(turn === 0 ? textTurn('one', 10, 3) : textTurn('two', 16, 8))
     })
@@ -264,11 +337,13 @@ describe('per-session Claude bridge', () => {
       fixture.adapter.stream(
         request([u1, assistant('a1', 'one'), user('u2', 'second')], 'session-a', {
           model: 'opus',
+          reasoningEffort: 'medium' as never,
         }),
       ),
     )
     expect(fixture.queries).toHaveLength(1)
     expect(fixture.queries[0]?.models).toEqual(['opus'])
+    expect(fixture.queries[0]?.efforts).toEqual(['medium'])
     expect(chunks.find((chunk) => chunk.type === 'usage')).toEqual({
       type: 'usage',
       usage: {

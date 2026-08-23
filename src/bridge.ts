@@ -2,6 +2,7 @@ import { cwd as processCwd } from 'node:process'
 import {
   query as sdkQuery,
   type Options as ClaudeSdkOptions,
+  type EffortLevel,
   type Query,
   type SDKMessage,
   type SDKUserMessage,
@@ -10,6 +11,8 @@ import type SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
 import type { GenerateOptions, StreamChunk } from '@deepseek-ai/dsh-llm'
 import type { ResolvedConfig } from './index.js'
 import { AsyncQueue } from './async-queue.js'
+import { type AttachmentReader, ClaudeContentEncoder } from './content.js'
+import { ClaudeDiagnostics } from './diagnostics.js'
 import { abortError, ClaudePluginError, protocolError, transportError } from './errors.js'
 import {
   assertSdkUserInput,
@@ -20,11 +23,13 @@ import {
 import { ClaudeOutputTranslator } from './output.js'
 import { ClaudeProcessFactory, resolveClaudeExecutable, sdkEnvironment } from './process.js'
 import { createReplayEnvelope } from './replay.js'
+import { resolveClaudeEffort } from './models.js'
 import { DSH_MCP_SERVER_NAME, DshToolServer } from './tool-server.js'
-import { UsageTracker } from './usage.js'
+import { UsageTracker, type UsageSnapshot, type UsageTelemetryDelta } from './usage.js'
 
 export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
   setModel(model: string): Promise<void>
+  applyFlagSettings(settings: { effortLevel?: EffortLevel | null }): Promise<void>
   interrupt(): Promise<unknown>
   close(): void
 }
@@ -56,7 +61,7 @@ class AsyncMutex {
 class SessionBridge {
   readonly #input = new AsyncQueue<SDKUserMessage>()
   readonly #output = new AsyncQueue<SDKMessage>()
-  readonly #cursor = new LiveInputCursor()
+  readonly #cursor: LiveInputCursor
   readonly #usage = new UsageTracker()
   readonly #mutex = new AsyncMutex()
   readonly #abortController = new AbortController()
@@ -65,6 +70,7 @@ class SessionBridge {
   #pump: Promise<void> | undefined
   #system: string | undefined
   #model: string | undefined
+  #effort: EffortLevel | undefined
   #closed = false
   #phase: 'idle' | 'generating' | 'awaiting-tools' | 'closed' = 'idle'
   #lastUsedAt = Date.now()
@@ -75,9 +81,14 @@ class SessionBridge {
     readonly config: ResolvedConfig,
     readonly queryFactory: ClaudeQueryFactory,
     readonly onClosed: (bridge: SessionBridge) => void,
+    attachments?: AttachmentReader,
   ) {
-    this.#toolServer = new DshToolServer(config.toolRoundTripTimeoutMs, (error) =>
-      this.#invalidate(error),
+    const encoder = new ClaudeContentEncoder(attachments)
+    this.#cursor = new LiveInputCursor(encoder)
+    this.#toolServer = new DshToolServer(
+      config.toolRoundTripTimeoutMs,
+      (error) => this.#invalidate(error),
+      encoder,
     )
   }
 
@@ -93,10 +104,19 @@ class SessionBridge {
     return this.#lastUsedAt
   }
 
+  get usageSnapshot(): UsageSnapshot {
+    return this.#usage.snapshot
+  }
+
+  get usageTelemetryDelta(): UsageTelemetryDelta {
+    return this.#usage.telemetryDelta
+  }
+
   async #start(
     model: string,
     system: string | undefined,
     start: ClaudeStartPlan,
+    effort: EffortLevel | undefined,
     signal?: AbortSignal,
   ): Promise<void> {
     const executable = await resolveClaudeExecutable(
@@ -115,6 +135,7 @@ class SessionBridge {
       managedSettings: { disableAllHooks: true },
       mcpServers: { [DSH_MCP_SERVER_NAME]: this.#toolServer.config },
       model,
+      ...(effort === undefined ? {} : { effort }),
       permissionMode: 'dontAsk',
       persistSession: true,
       plugins: [],
@@ -136,6 +157,7 @@ class SessionBridge {
     }
     this.#query = this.queryFactory({ prompt: this.#input, options })
     this.#model = model
+    this.#effort = effort
     this.#system = system
     this.#pump = this.#pumpOutput(this.#query)
   }
@@ -177,7 +199,8 @@ class SessionBridge {
     try {
       if (this.#closed) throw transportError('Claude session bridge is closed')
       if (options.signal?.aborted === true) throw abortError(options.signal.reason)
-      const plan = this.#cursor.prepareStep(options, control)
+      const effort = resolveClaudeEffort(options.reasoningEffort)
+      const plan = await this.#cursor.prepareStep(options, control)
       if (plan.kind === 'tool-results' && this.#phase !== 'awaiting-tools') {
         throw protocolError('DSH supplied tool results while Claude was not awaiting tools')
       }
@@ -189,7 +212,7 @@ class SessionBridge {
         if (plan.kind !== 'prompt' || plan.start === undefined) {
           throw protocolError('a new Claude query requires an explicit cold-start plan')
         }
-        await this.#start(model, options.system, plan.start, options.signal)
+        await this.#start(model, options.system, plan.start, effort, options.signal)
       } else {
         if (plan.kind === 'prompt' && plan.start !== undefined) {
           throw protocolError('a live Claude query received a second cold-start plan')
@@ -201,6 +224,10 @@ class SessionBridge {
           await this.#query.setModel(model)
           this.#model = model
         }
+        if (this.#effort !== effort) {
+          await this.#query.applyFlagSettings({ effortLevel: effort ?? null })
+          this.#effort = effort
+        }
       }
       options.signal?.addEventListener('abort', onAbort, { once: true })
       this.#phase = 'generating'
@@ -210,7 +237,7 @@ class SessionBridge {
           this.#input.push(message)
         }
       } else {
-        this.#toolServer.resolve(plan.results)
+        await this.#toolServer.resolve(plan.results, options.signal)
       }
 
       const translator = new ClaudeOutputTranslator(this.#usage)
@@ -312,6 +339,8 @@ export class BridgeManager {
     readonly subprocess: SubprocessRuntime,
     readonly config: ResolvedConfig,
     readonly queryFactory: ClaudeQueryFactory = defaultQueryFactory,
+    readonly attachments?: AttachmentReader,
+    readonly diagnostics = new ClaudeDiagnostics(config.debug),
   ) {
     this.processFactory = new ClaudeProcessFactory(subprocess, config)
   }
@@ -332,6 +361,7 @@ export class BridgeManager {
           this.#cancelEviction(key)
         }
       },
+      this.attachments,
     )
   }
 
@@ -375,6 +405,8 @@ export class BridgeManager {
       throw transportError('Claude idle bridge cleanup failed', this.#evictionFailure)
     }
     const key = bridgeKey(options)
+    const diagnostic = this.diagnostics.begin(options, model)
+    let diagnosticFinished = false
     const ephemeral = key === undefined
     if (key !== undefined) this.#cancelEviction(key)
     let bridge = key === undefined ? undefined : this.#bridges.get(key)
@@ -386,23 +418,33 @@ export class BridgeManager {
     try {
       while (true) {
         let observed = false
+        diagnostic.attempt(attempt + 1, attempt === 0 ? 'planned' : 'retry-degraded')
         try {
           for await (const chunk of bridge.stream(options, model, {
             forceDegraded: attempt > 0,
           })) {
             observed = true
+            if (chunk.type === 'finish') {
+              diagnostic.finish(chunk.reason.kind, bridge.usageSnapshot, bridge.usageTelemetryDelta)
+              diagnosticFinished = true
+            }
             yield chunk
           }
           break
         } catch (error: unknown) {
           await this.#remove(key, bridge)
-          if (attempt > 0 || observed || !retryableBeforeObservation(error)) throw error
+          if (attempt > 0 || observed || !retryableBeforeObservation(error)) {
+            diagnostic.fail(error)
+            diagnosticFinished = true
+            throw error
+          }
           attempt += 1
           bridge = this.#newBridge(key)
           if (key !== undefined) this.#bridges.set(key, bridge)
         }
       }
     } finally {
+      if (!diagnosticFinished) diagnostic.abandoned()
       if (ephemeral || bridge.closed) {
         await this.#remove(key, bridge)
       } else if (key !== undefined) {

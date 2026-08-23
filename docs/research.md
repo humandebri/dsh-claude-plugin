@@ -160,6 +160,43 @@ built-ins while leaving MCP tools available.
 
 Source: [Agent SDK custom tools](https://code.claude.com/docs/en/agent-sdk/custom-tools)
 
+## Content and telemetry contracts
+
+DSH `0.1.1-rc.2` stores image bytes behind `ctx.attachments`; model history
+carries only immutable `ImageAttachmentRef` metadata. The request seam can
+derive a deterministic image variant from a provider pixel/byte policy and
+returns verified bytes only at dispatch time. DSH's model metadata declares
+`text` and `image` input modalities, while its usage stream exposes input,
+output, cache-read, cache-write, and optional reasoning-token counts—but no
+cost field.
+
+Claude SDK user messages accept base64 PNG, JPEG, WebP, and GIF blocks. Current
+Claude vision guidance sets a 10 MiB base64 limit and an 8,000-pixel maximum
+dimension; the adapter combines those limits with the tighter DSH deployment
+policy. Claude effort is request state, but `max` and `xhigh` support varies by
+concrete model, so stable aliases conservatively expose only `low`, `medium`,
+and `high`.
+
+The Agent SDK result separates cumulative `modelUsage` (all calls in the query
+pipeline) from main-loop per-turn usage details. Its USD values are estimates.
+The adapter maps token fields to DSH, retains per-model/cost facts as private
+replay telemetry, and exposes only redacted totals in opt-in diagnostics. It
+does not add a non-existent cost field to DSH's public `TokenUsage` contract.
+
+MCP tool results support text, image, audio, embedded-resource, resource-link,
+and optional structured content. This milestone preserves the subset DSH can
+represent or merge-extend today: text, image, embedded resource, resource link,
+structured object, and explicit error. Every extension is size-bounded and
+validated through the pinned MCP SDK schema before reaching Claude.
+
+Sources:
+
+- [DSH attachment contract](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/attachment/attachment/src/types.ts)
+- [DSH LLM content, model, and usage types](https://github.com/deepseek-ai/deepseek-harness/blob/b150a551b8d465e31e418e1b2eaf5e79bbb7d28e/packages/llm/llm/src/types.ts)
+- [Claude vision limits](https://platform.claude.com/docs/en/build-with-claude/vision)
+- [Claude effort](https://platform.claude.com/docs/en/build-with-claude/effort)
+- [MCP tool-result contract](https://modelcontextprotocol.io/specification/draft/server/tools)
+
 ## Live protocol probes
 
 Small throwaway programs against Agent SDK `0.3.241` established constraints
@@ -221,9 +258,7 @@ written for this repository. See [Authors and provenance](../AUTHORS.md).
    abandoned MCP handlers forever?
 2. Which Claude session/fork identifiers remain safe to resume after a DSH
    restart when the stored DSH-prefix fingerprint still matches?
-3. What size and content limits make degraded transcript-envelope replay
-   explicit and deterministic after compaction, import, or divergent history?
-4. Which adjacent Agent SDK versions preserve the probed partial-message,
+3. Which adjacent Agent SDK versions preserve the probed partial-message,
    cumulative-usage, raw-MCP, and custom-spawn contracts?
 
 Each question has a contract test and an explicit fail-closed fallback in the

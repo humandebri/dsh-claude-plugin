@@ -106,7 +106,7 @@ describe('raw-schema DSH MCP tool server', () => {
     })
     await vi.waitFor(() => expect(server.pending.size).toBe(1))
     await server.assertBoundary([call('toolu_read_1', 'read', '{"path":"/fixture"}')], generation)
-    server.resolve([result('toolu_read_1', 'fixture-value')])
+    await server.resolve([result('toolu_read_1', 'fixture-value')])
     await expect(pending).resolves.toMatchObject({
       content: [{ type: 'text', text: 'fixture-value' }],
       isError: false,
@@ -123,7 +123,7 @@ describe('raw-schema DSH MCP tool server', () => {
     await vi.waitFor(() => expect(server.pending.size).toBe(1))
     expect(server.pending.snapshots[0]?.arguments).toBe('{}')
     await server.assertBoundary([call('toolu_ping_1', 'ping', '{}')], generation)
-    server.resolve([result('toolu_ping_1', 'pong')])
+    await server.resolve([result('toolu_ping_1', 'pong')])
     await expect(pending).resolves.toMatchObject({ content: [{ text: 'pong' }] })
   })
 
@@ -135,7 +135,7 @@ describe('raw-schema DSH MCP tool server', () => {
       _meta: { [CLAUDE_TOOL_USE_ID_META]: 'toolu_shell_1' },
     })
     await vi.waitFor(() => expect(success.server.pending.size).toBe(1))
-    success.server.resolve([result('toolu_shell_1', 'policy denied', true)])
+    await success.server.resolve([result('toolu_shell_1', 'policy denied', true)])
     await expect(pending).resolves.toMatchObject({ isError: true })
 
     const missing = await connected([tool('read')])
