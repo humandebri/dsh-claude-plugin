@@ -134,7 +134,8 @@ Branch: `michi/tool-bridge`
 - The persistent pump parks at unresolved MCP handlers; the next `stream()`
   consumes exact DSH tool-result messages, resolves those handlers, and drains
   continued output from the same Claude query.
-- Native Claude tools/settings/plugins/hooks/skills/MCP are disabled.
+- Native Claude tools/settings/plugins/hooks/skills and ambient MCP servers are
+  disabled; only the in-process DSH MCP server is configured.
 
 ### Tests
 

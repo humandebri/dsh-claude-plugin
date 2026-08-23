@@ -14,6 +14,7 @@ import { abortError, protocolError, transportError } from './errors.js'
 import { LiveInputCursor } from './input.js'
 import { ClaudeOutputTranslator } from './output.js'
 import { ClaudeProcessFactory, resolveClaudeExecutable, sdkEnvironment } from './process.js'
+import { DSH_MCP_SERVER_NAME, DshToolServer } from './tool-server.js'
 import { UsageTracker } from './usage.js'
 
 export interface ClaudeQuery extends AsyncIterable<SDKMessage> {
@@ -53,6 +54,7 @@ class SessionBridge {
   readonly #usage = new UsageTracker()
   readonly #mutex = new AsyncMutex()
   readonly #abortController = new AbortController()
+  readonly #toolServer: DshToolServer
   #query: ClaudeQuery | undefined
   #pump: Promise<void> | undefined
   #system: string | undefined
@@ -64,7 +66,11 @@ class SessionBridge {
     readonly processFactory: ClaudeProcessFactory,
     readonly config: ResolvedConfig,
     readonly queryFactory: ClaudeQueryFactory,
-  ) {}
+  ) {
+    this.#toolServer = new DshToolServer(config.toolRoundTripTimeoutMs, (error) =>
+      this.#invalidate(error),
+    )
+  }
 
   get closed(): boolean {
     return this.#closed
@@ -79,13 +85,13 @@ class SessionBridge {
     )
     const options: ClaudeSdkOptions = {
       abortController: this.#abortController,
-      allowedTools: [],
+      allowedTools: [`mcp__${DSH_MCP_SERVER_NAME}__*`],
       cwd: processCwd(),
       env: sdkEnvironment(this.config.passEnv),
       hooks: {},
       includePartialMessages: true,
       managedSettings: { disableAllHooks: true },
-      mcpServers: {},
+      mcpServers: { [DSH_MCP_SERVER_NAME]: this.#toolServer.config },
       model,
       permissionMode: 'dontAsk',
       persistSession: true,
@@ -121,6 +127,9 @@ class SessionBridge {
     this.#input.fail(error)
     this.#abortController.abort(error)
     this.#query?.close()
+    void this.#toolServer.close(
+      error instanceof Error ? protocolError(error.message, error) : protocolError('bridge closed'),
+    )
   }
 
   async *stream(options: GenerateOptions, model: string): AsyncIterable<StreamChunk> {
@@ -130,6 +139,8 @@ class SessionBridge {
     try {
       if (this.#closed) throw transportError('Claude session bridge is closed')
       if (options.signal?.aborted === true) throw abortError(options.signal.reason)
+      const plan = this.#cursor.prepareStep(options)
+      const toolGeneration = this.#toolServer.install(options.tools ?? [])
       if (this.#query === undefined) await this.#start(model, options.system, options.signal)
       else {
         if (this.#system !== options.system) {
@@ -140,15 +151,27 @@ class SessionBridge {
           this.#model = model
         }
       }
-      const messages = this.#cursor.prepare(options)
       options.signal?.addEventListener('abort', onAbort, { once: true })
-      for (const message of messages) this.#input.push(message)
+      if (plan.kind === 'prompt') {
+        for (const message of plan.messages) this.#input.push(message)
+      } else {
+        this.#toolServer.resolve(plan.results)
+      }
 
       const translator = new ClaudeOutputTranslator(this.#usage)
       while (!translator.complete) {
         const next = await this.#output.next()
         if (next.done) throw protocolError('Claude SDK output ended before a result message')
-        for (const chunk of translator.accept(next.value)) yield chunk
+        for (const chunk of translator.accept(next.value)) {
+          if (chunk.type === 'finish' && chunk.reason.kind === 'tool-calls') {
+            await this.#toolServer.assertBoundary(
+              translator.toolCalls,
+              toolGeneration,
+              options.signal,
+            )
+          }
+          yield chunk
+        }
       }
       if (translator.terminalReason?.kind === 'error') {
         committed = true
@@ -176,6 +199,7 @@ class SessionBridge {
     } catch {
       // The output queue already carries the transport failure to the active request.
     }
+    await this.#toolServer.close()
   }
 }
 

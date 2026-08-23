@@ -33,6 +33,8 @@ export * from './bridge.js'
 export * from './input.js'
 export * from './output.js'
 export * from './process.js'
+export * from './pending-tools.js'
+export * from './tool-server.js'
 export * from './usage.js'
 
 export const name = 'dsh-claude-plugin'

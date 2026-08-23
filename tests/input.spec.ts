@@ -99,15 +99,117 @@ describe('live SDK input cursor', () => {
   })
 
   it.each([
-    { tools: [{ name: 'read', description: 'read', parameters: {} }] },
     { temperature: 0 },
     { maxTokens: 100 },
     { stop: ['END'] },
     { reasoningEffort: 'high' as never },
-  ])('rejects controls not owned by the PR 3 transport: %#', (extra) => {
+  ])('rejects controls not owned by the Claude transport: %#', (extra) => {
     expect(() =>
       new LiveInputCursor().prepare(options([message('u', 'user', 'go')], extra)),
     ).toThrow(/not enabled|does not expose|not enabled/)
+  })
+
+  it('accepts exact DSH tool results as an MCP resume plan without a user prompt', () => {
+    const cursor = new LiveInputCursor()
+    const first = [message('u1', 'user', 'read the fixture')]
+    expect(
+      cursor.prepareStep(
+        options(first, {
+          tools: [
+            {
+              name: 'read',
+              description: 'read a fixture',
+              parameters: { type: 'object', properties: {} },
+            },
+          ],
+        }),
+      ).kind,
+    ).toBe('prompt')
+    const toolCall = {
+      type: 'tool-call' as const,
+      id: 'toolu_read_1' as never,
+      name: 'read',
+      arguments: '{"path":"/fixture"}',
+    }
+    cursor.commit(first, { model: 'default', content: [toolCall] })
+    const assistant: Message = {
+      id: 'a1' as never,
+      role: 'assistant',
+      content: [toolCall],
+      source: {
+        kind: 'model',
+        provider: 'claude-code',
+        model: 'default',
+      },
+    }
+    const toolResult: Message = {
+      id: 'r1' as never,
+      role: 'user',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'toolu_read_1' as never,
+          content: [{ type: 'text', text: 'fixture-value' }],
+          isError: false,
+        },
+      ],
+      source: { kind: 'tool', callId: 'toolu_read_1' as never },
+    }
+    expect(cursor.prepareStep(options([...first, assistant, toolResult]))).toEqual({
+      kind: 'tool-results',
+      results: toolResult.content,
+    })
+    expect(() => cursor.prepare(options([...first, assistant, toolResult]))).toThrow(/resume/)
+  })
+
+  it('rejects malformed DSH tool-result continuation messages', () => {
+    const cursor = new LiveInputCursor()
+    const first = [message('u1', 'user', 'use a tool')]
+    cursor.prepare(options(first))
+    const call = {
+      type: 'tool-call' as const,
+      id: 'toolu_1' as never,
+      name: 'read',
+      arguments: '{}',
+    }
+    cursor.commit(first, { model: 'default', content: [call] })
+    const assistant: Message = {
+      id: 'a1' as never,
+      role: 'assistant',
+      content: [call],
+      source: { kind: 'model', provider: 'claude-code', model: 'default' },
+    }
+    const valid: Message = {
+      id: 'r1' as never,
+      role: 'user',
+      content: [
+        {
+          type: 'tool-result',
+          toolCallId: 'toolu_1' as never,
+          content: [{ type: 'text', text: 'ok' }],
+        },
+      ],
+      source: { kind: 'tool', callId: 'toolu_1' as never },
+    }
+    for (const invalid of [
+      { ...valid, role: 'assistant' as const },
+      { ...valid, source: { kind: 'user' as const } },
+      { ...valid, content: [] },
+      { ...valid, source: { kind: 'tool' as const, callId: 'other' as never } },
+      {
+        ...valid,
+        content: [
+          {
+            ...valid.content[0],
+            content: [{ type: 'reasoning' as const, text: 'hidden' }],
+          },
+        ],
+      },
+    ]) {
+      expect(() => cursor.prepareStep(options([...first, assistant, invalid as Message]))).toThrow(
+        /tool boundary|correlation|content/,
+      )
+    }
   })
 
   it('rejects empty and non-text user content', () => {

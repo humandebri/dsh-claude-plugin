@@ -5,12 +5,20 @@ import type {
 } from '@anthropic-ai/claude-agent-sdk'
 import type { ContentBlock, FinishReason, StreamChunk } from '@deepseek-ai/dsh-llm'
 import { CLAUDE_ERROR_CODES, claudeError, protocolError } from './errors.js'
+import { asCallId, canonicalToolJson } from './pending-tools.js'
+import { dshToolName } from './tool-server.js'
 import { UsageTracker } from './usage.js'
 
-interface OpenBlock {
-  readonly type: 'text' | 'reasoning'
-  text: string
-}
+type OpenBlock =
+  | { readonly type: 'text'; text: string }
+  | { readonly type: 'reasoning'; text: string }
+  | {
+      readonly type: 'tool-call'
+      readonly id: string
+      readonly name: string
+      arguments: string
+      readonly startedWithArguments: boolean
+    }
 
 function resultFailure(error: SDKAssistantMessageError | undefined) {
   switch (error) {
@@ -38,11 +46,38 @@ function resultFailure(error: SDKAssistantMessageError | undefined) {
 }
 
 function sameBlocks(left: readonly ContentBlock[], right: readonly ContentBlock[]): boolean {
-  return JSON.stringify(left) === JSON.stringify(right)
+  if (left.length !== right.length) return false
+  return left.every((block, index) => {
+    const other = right[index]
+    if (other === undefined || block.type !== other.type) return false
+    if (block.type === 'tool-call' && other.type === 'tool-call') {
+      if (block.id !== other.id || block.name !== other.name) return false
+      try {
+        return (
+          canonicalToolJson(JSON.parse(block.arguments)) ===
+          canonicalToolJson(JSON.parse(other.arguments))
+        )
+      } catch {
+        return false
+      }
+    }
+    return JSON.stringify(block) === JSON.stringify(other)
+  })
 }
 
 function finish(reason: FinishReason): StreamChunk {
   return { type: 'finish', reason }
+}
+
+function completedToolArguments(input: unknown): string {
+  if (input === null || typeof input !== 'object' || Array.isArray(input)) {
+    throw protocolError('Claude completed non-object tool arguments')
+  }
+  try {
+    return canonicalToolJson(input)
+  } catch (error: unknown) {
+    throw protocolError('Claude completed invalid JSON tool arguments', error)
+  }
 }
 
 /** One-turn state machine translating authoritative SDK partial events into DSH chunks. */
@@ -68,6 +103,12 @@ export class ClaudeOutputTranslator {
 
   get terminalReason(): FinishReason | undefined {
     return this.#terminalReason
+  }
+
+  get toolCalls(): readonly Extract<ContentBlock, { type: 'tool-call' }>[] {
+    return this.#closed.filter(
+      (block): block is Extract<ContentBlock, { type: 'tool-call' }> => block.type === 'tool-call',
+    )
   }
 
   #observeSession(message: { session_id?: string }): void {
@@ -99,16 +140,41 @@ export class ClaudeOutputTranslator {
         if (content.type === 'text') block = { type: 'text', text: content.text }
         else if (content.type === 'thinking') {
           block = { type: 'reasoning', text: content.thinking }
+        } else if (content.type === 'tool_use') {
+          if (
+            content.input === null ||
+            typeof content.input !== 'object' ||
+            Array.isArray(content.input)
+          ) {
+            throw protocolError('Claude tool-use input must start as a JSON object')
+          }
+          const initial =
+            Object.keys(content.input).length === 0 ? '' : completedToolArguments(content.input)
+          block = {
+            type: 'tool-call',
+            id: content.id,
+            name: dshToolName(content.name),
+            arguments: initial,
+            startedWithArguments: initial.length > 0,
+          }
         } else {
           throw protocolError(
-            `Claude emitted unsupported ${JSON.stringify(content.type)} content while tools were disabled`,
+            `Claude emitted unsupported ${JSON.stringify(content.type)} content while only DSH MCP tools were enabled`,
           )
         }
         this.#open.set(event.index, block)
         const chunks: StreamChunk[] = [
           { type: 'block-start', index: event.index, blockType: block.type },
         ]
-        if (block.text.length > 0) {
+        if (block.type === 'tool-call') {
+          chunks.push({
+            type: 'tool-call-delta',
+            index: event.index,
+            id: asCallId(block.id),
+            name: block.name,
+            argumentsDelta: block.arguments,
+          })
+        } else if (block.text.length > 0) {
           chunks.push(
             block.type === 'text'
               ? { type: 'text-delta', index: event.index, text: block.text }
@@ -132,6 +198,20 @@ export class ClaudeOutputTranslator {
           block.text += delta.thinking
           return [{ type: 'reasoning-delta', index: event.index, text: delta.thinking }]
         }
+        if (delta.type === 'input_json_delta' && block.type === 'tool-call') {
+          if (block.startedWithArguments && delta.partial_json.length > 0) {
+            throw protocolError('Claude streamed tool arguments after a non-empty tool-use start')
+          }
+          block.arguments += delta.partial_json
+          return [
+            {
+              type: 'tool-call-delta',
+              index: event.index,
+              id: asCallId(block.id),
+              argumentsDelta: delta.partial_json,
+            },
+          ]
+        }
         throw protocolError(
           `Claude emitted ${JSON.stringify(delta.type)} for a ${block.type} content block`,
         )
@@ -142,30 +222,77 @@ export class ClaudeOutputTranslator {
           throw protocolError(`Claude stopped unopened content block ${event.index}`)
         }
         this.#open.delete(event.index)
-        const content: ContentBlock =
-          block.type === 'text'
-            ? { type: 'text', text: block.text }
-            : { type: 'reasoning', text: block.text }
+        let content: ContentBlock
+        if (block.type === 'text') content = { type: 'text', text: block.text }
+        else if (block.type === 'reasoning') content = { type: 'reasoning', text: block.text }
+        else {
+          const rawArguments = block.arguments.length === 0 ? '{}' : block.arguments
+          let parsed: unknown
+          try {
+            parsed = JSON.parse(rawArguments)
+          } catch (error: unknown) {
+            throw protocolError('Claude completed malformed JSON tool arguments', error)
+          }
+          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+            throw protocolError('Claude completed non-object tool arguments')
+          }
+          content = {
+            type: 'tool-call',
+            id: asCallId(block.id),
+            name: block.name,
+            arguments: rawArguments,
+          }
+        }
         this.#closed.push(content)
         return [{ type: 'block-end', index: event.index, block: content }]
       }
     }
   }
 
-  #assistant(message: Extract<SDKMessage, { type: 'assistant' }>): void {
+  #assistant(message: Extract<SDKMessage, { type: 'assistant' }>): StreamChunk[] {
     if (message.parent_tool_use_id !== null) {
-      throw protocolError('Claude emitted a subagent assistant message while tools were disabled')
+      throw protocolError(
+        'Claude emitted a subagent assistant message while native tools were disabled',
+      )
     }
     this.#assistantError ??= message.error
     for (const block of message.message.content) {
       if (block.type === 'text') this.#completed.push({ type: 'text', text: block.text })
       else if (block.type === 'thinking') {
         this.#completed.push({ type: 'reasoning', text: block.thinking })
+      } else if (block.type === 'tool_use') {
+        this.#completed.push({
+          type: 'tool-call',
+          id: asCallId(block.id),
+          name: dshToolName(block.name),
+          arguments: completedToolArguments(block.input),
+        })
       } else if (message.error === undefined) {
         throw protocolError(
-          `Claude completed unsupported ${JSON.stringify(block.type)} content while tools were disabled`,
+          `Claude completed unsupported ${JSON.stringify(block.type)} content while only DSH MCP tools were enabled`,
         )
       }
+    }
+    if (
+      this.#assistantError === undefined &&
+      this.#completed.some((block) => block.type === 'tool-call')
+    ) {
+      if (this.#open.size > 0)
+        throw protocolError('Claude assistant arrived with open content blocks')
+      this.#reconcile()
+      this.#complete = true
+      this.#terminalReason = { kind: 'tool-calls' }
+      return [finish(this.#terminalReason)]
+    }
+    return []
+  }
+
+  #reconcile(): void {
+    if (this.#closed.length > 0 && this.#completed.length === 0) {
+      throw protocolError('Claude omitted completed assistant reconciliation messages')
+    }
+    if (this.#completed.length > 0 && !sameBlocks(this.#closed, this.#completed)) {
+      throw protocolError('Claude partial and completed assistant content did not reconcile')
     }
   }
 
@@ -187,15 +314,10 @@ export class ClaudeOutputTranslator {
       chunks.push(finish(this.#terminalReason))
       return chunks
     }
-    if (this.#closed.length > 0 && this.#completed.length === 0) {
-      throw protocolError('Claude omitted completed assistant reconciliation messages')
-    }
-    if (this.#completed.length > 0 && !sameBlocks(this.#closed, this.#completed)) {
-      throw protocolError('Claude partial and completed assistant content did not reconcile')
-    }
+    this.#reconcile()
     const stopReason = message.stop_reason ?? this.#messageStopReason
     if (stopReason === 'tool_use') {
-      throw protocolError('Claude requested a tool while the tool bridge was disabled')
+      throw protocolError('Claude ended with tool_use without a reconciled DSH MCP tool boundary')
     }
     if (
       stopReason !== null &&
@@ -215,10 +337,7 @@ export class ClaudeOutputTranslator {
     if (this.#complete) throw protocolError('Claude emitted output after the terminal result')
     this.#observeSession(message)
     if (message.type === 'stream_event') return this.#partial(message)
-    if (message.type === 'assistant') {
-      this.#assistant(message)
-      return []
-    }
+    if (message.type === 'assistant') return this.#assistant(message)
     if (message.type === 'result') return this.#result(message)
     return []
   }
