@@ -25,8 +25,12 @@ const required = [
   'LICENSE',
   'README.md',
   'cordis.patch.yml',
+  'lib/cli.js',
+  'lib/doctor.js',
+  'lib/doctor-runtime.js',
   'lib/index.d.ts',
   'lib/index.js',
+  'lib/profile-verifier.js',
   'package.json',
 ]
 const missing = required.filter((file) => !files.includes(file))

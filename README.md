@@ -43,8 +43,9 @@ Claude thinking is retained as DSH reasoning when the selected model exposes
 it, and `low`, `medium`, and `high` effort can be selected through DSH model
 configuration.
 
-This is not the completed plugin. Doctor/install automation, authenticated
-WebUI E2E, and parity benchmarks arrive in later pull requests. Unsupported
+The package now includes a bounded `doctor`, a semantic profile transition
+verifier, and an isolated packed-tarball install/removal gate. Authenticated
+WebUI E2E and parity benchmarks arrive in later pull requests. Unsupported
 content or recovery state fails closed with a stable diagnostic rather than
 being silently dropped or bypassing DSH.
 
@@ -74,9 +75,29 @@ npm run smoke:claude
 
 Use `npm run smoke:claude -- --bundled` to exercise the SDK-bundled CLI instead.
 
+Run the reusable prerequisite and transport diagnostic without a model call:
+
+```bash
+npm run build
+node lib/cli.js doctor --policy host-only --no-live
+```
+
+Then run `node lib/cli.js doctor --policy host-only --live` for conclusive
+authentication. `claude auth status` alone can be stale. The doctor validates
+package/peer versions, the selected executable, bounded process lifecycle, SDK
+startup, DSH-only MCP authority, exact generation, and child cleanup without
+including prompts, tool payloads, environment values, or raw errors in its
+report.
+
 ## Install into a DSH profile
 
-From this checkout:
+For a safe packed-artifact rehearsal against an isolated temporary DSH home:
+
+```bash
+npm run test:profile
+```
+
+For a local development checkout:
 
 ```bash
 dsh plugin --profile web add .
@@ -90,6 +111,11 @@ row. Later user/profile patches retain precedence. To remove it:
 ```bash
 dsh plugin --profile web remove dsh-claude-plugin
 ```
+
+Use the [complete installation and removal guide](docs/install.md) to capture
+before/after dumps and prove the profile returns to baseline. Stable doctor,
+adapter, and profile-verifier failures are mapped in the
+[troubleshooting guide](docs/troubleshooting.md).
 
 The current route supports Standard-style text, image, and DSH tool turns.
 Treat it as pre-release until the authenticated tool, replay, and WebUI gates in
@@ -183,6 +209,8 @@ still enforces any enterprise-managed policy installed by an administrator.
 - [Current-source research](docs/research.md)
 - [Architecture proposal](docs/proposal.md)
 - [Detailed implementation plan](docs/implementation-plan.md)
+- [Install and remove safely](docs/install.md)
+- [Troubleshooting and stable diagnostics](docs/troubleshooting.md)
 - [Authors and provenance](AUTHORS.md)
 
 ## License
