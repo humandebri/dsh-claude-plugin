@@ -4,10 +4,12 @@ import type { SubprocessHandle, SubprocessSpawnSpec } from '@deepseek-ai/dsh-sub
 import type SubprocessRuntime from '@deepseek-ai/dsh-subprocess'
 import {
   ClaudeProcessFactory,
+  CLAUDE_RUNTIME_ENV,
   DshSpawnedProcess,
   filterClaudeEnvironment,
   MAX_CLAUDE_STDERR_BYTES,
   resolveClaudeExecutable,
+  sdkEnvironment,
 } from '../src/process.js'
 import { resolveConfig } from '../src/index.js'
 
@@ -50,6 +52,8 @@ describe('managed Claude process adapter', () => {
           CLAUDE_AGENT_SDK_CLIENT_APP: 'fixture',
           HTTPS_PROXY: 'https://proxy.invalid',
           PATH: '/unsafe/override',
+          HOME: '/Users/fixture',
+          USER: 'fixture',
           DSH_WEB_URL: 'http://localhost',
           ANTHROPIC_API_KEY: 'secret',
           SAFE_TOKENIZER_MODE: 'still blocked because name contains token',
@@ -61,7 +65,21 @@ describe('managed Claude process adapter', () => {
       CLAUDE_AGENT_SDK_VERSION: '0.3.241',
       CLAUDE_AGENT_SDK_CLIENT_APP: 'fixture',
       HTTPS_PROXY: 'https://proxy.invalid',
+      HOME: '/Users/fixture',
+      USER: 'fixture',
     })
+  })
+
+  it('supplies only non-secret identity/home facts needed by the authenticated CLI', () => {
+    const environment = sdkEnvironment([])
+    for (const [name, value] of Object.entries(environment)) {
+      if (name === 'CLAUDE_AGENT_SDK_CLIENT_APP') continue
+      expect(CLAUDE_RUNTIME_ENV.has(name.toUpperCase())).toBe(true)
+      expect(value).toBe(process.env[name])
+    }
+    expect(environment.CLAUDE_AGENT_SDK_CLIENT_APP).toBe('dsh-claude-plugin/0.1.0')
+    if (process.env.HOME !== undefined) expect(environment.HOME).toBe(process.env.HOME)
+    if (process.env.USER !== undefined) expect(environment.USER).toBe(process.env.USER)
   })
 
   it('resolves host, fallback, and bundled executable policies', async () => {

@@ -70,19 +70,21 @@ the next tool-bridge milestone.
 
 ## Configuration
 
-| Field | Default | Meaning |
-| --- | --- | --- |
-| `claudeCommand` | `claude` | Bare host executable or absolute path |
-| `executablePolicy` | `host-only` | Host/bundled executable selection |
-| `defaultModel` | `sonnet` | Target of the `default` model alias |
-| `sessionIdleMs` | 15 minutes | Reserved for the session-lifecycle milestone |
-| `toolRoundTripTimeoutMs` | 30 minutes | Future DSH tool pause bound |
-| `shutdownGraceMs` | 5 seconds | Managed process shutdown grace |
-| `passEnv` | `[]` | Explicit non-sensitive environment names |
-| `debug` | `false` | Safe transport diagnostics |
+| Field                    | Default     | Meaning                                      |
+| ------------------------ | ----------- | -------------------------------------------- |
+| `claudeCommand`          | `claude`    | Bare host executable or absolute path        |
+| `executablePolicy`       | `host-only` | Host/bundled executable selection            |
+| `defaultModel`           | `sonnet`    | Target of the `default` model alias          |
+| `sessionIdleMs`          | 15 minutes  | Reserved for the session-lifecycle milestone |
+| `toolRoundTripTimeoutMs` | 30 minutes  | Future DSH tool pause bound                  |
+| `shutdownGraceMs`        | 5 seconds   | Managed process shutdown grace               |
+| `passEnv`                | `[]`        | Explicit non-sensitive environment names     |
+| `debug`                  | `false`     | Safe transport diagnostics                   |
 
-Sensitive names and all `DSH_*` environment entries are rejected from
-`passEnv`. Claude native tools, filesystem settings, SDK hooks, plugins,
+The child receives SDK protocol facts, non-secret OS home/identity variables
+needed for Claude Code to locate its own authenticated profile, and explicitly
+approved `passEnv` names. Sensitive names and all `DSH_*` environment entries
+are rejected. Claude native tools, filesystem settings, SDK hooks, plugins,
 main-session skills, and ambient MCP servers are disabled; DSH remains the
 intended execution authority. Claude Code still enforces any enterprise-managed
 policy installed by an administrator.

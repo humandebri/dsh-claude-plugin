@@ -15,6 +15,19 @@ const REQUIRED_SDK_ENV = new Set([
   'CLAUDE_CODE_ENTRYPOINT',
 ])
 
+/** Non-secret OS identity/home facts Claude needs to locate its authenticated profile. */
+export const CLAUDE_RUNTIME_ENV = new Set([
+  'APPDATA',
+  'HOME',
+  'HOMEDRIVE',
+  'HOMEPATH',
+  'LOCALAPPDATA',
+  'LOGNAME',
+  'USER',
+  'USERNAME',
+  'USERPROFILE',
+])
+
 /** Keep only SDK protocol facts and explicitly opted-in non-secret environment values. */
 export function filterClaudeEnvironment(
   source: Readonly<Record<string, string | undefined>>,
@@ -25,7 +38,9 @@ export function filterClaudeEnvironment(
   for (const [name, value] of Object.entries(source)) {
     const folded = name.toUpperCase()
     if (folded.startsWith('DSH_') || SENSITIVE_ENV_PATTERN.test(name)) continue
-    if (!REQUIRED_SDK_ENV.has(folded) && !optedIn.has(folded)) continue
+    if (!REQUIRED_SDK_ENV.has(folded) && !CLAUDE_RUNTIME_ENV.has(folded) && !optedIn.has(folded)) {
+      continue
+    }
     filtered[name] = value
   }
   return filtered
@@ -34,6 +49,9 @@ export function filterClaudeEnvironment(
 export function sdkEnvironment(passEnv: readonly string[]): NodeJS.ProcessEnv {
   const source: NodeJS.ProcessEnv = {
     CLAUDE_AGENT_SDK_CLIENT_APP: 'dsh-claude-plugin/0.1.0',
+  }
+  for (const [name, value] of Object.entries(process.env)) {
+    if (CLAUDE_RUNTIME_ENV.has(name.toUpperCase())) source[name] = value
   }
   for (const name of passEnv) source[name] = process.env[name]
   return source
