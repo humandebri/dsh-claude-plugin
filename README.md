@@ -43,11 +43,11 @@ Claude thinking is retained as DSH reasoning when the selected model exposes
 it, and `low`, `medium`, and `high` effort can be selected through DSH model
 configuration.
 
-The package now includes a bounded `doctor`, a semantic profile transition
-verifier, and an isolated packed-tarball install/removal gate. Authenticated
-WebUI E2E and parity benchmarks arrive in later pull requests. Unsupported
-content or recovery state fails closed with a stable diagnostic rather than
-being silently dropped or bypassing DSH.
+The package now includes a bounded `doctor`, semantic profile transition
+verification, isolated packed-tarball install/removal and WebUI gates, and a
+paired direct-Claude parity benchmark. Unsupported content or recovery state
+fails closed with a stable diagnostic rather than being silently dropped or
+bypassing DSH.
 
 ## Requirements
 
@@ -135,6 +135,24 @@ After `claude auth login`, run `npm run test:web:live` for text, tool,
 cancellation, multi-turn, and cold-restart coverage. See the
 [WebUI end-to-end guide](docs/web-e2e.md) for the evidence boundary, sanitized
 report schema, browser checklist, and exact manual-service commands.
+
+## Direct-Claude parity benchmark
+
+List the versioned scenarios and run the authenticated gate without starting a
+benchmark:
+
+```bash
+npm run benchmark:list
+npm run benchmark
+```
+
+After `claude auth login`, `npm run benchmark:live` runs the same fixtures
+through the direct Claude Agent SDK and through DSH plus this plugin. The
+default one-warm-up/five-measurement design records paired latency,
+correctness, tool correlation, usage, and process cleanup while retaining only
+sanitized counts and output digests. See the
+[benchmark and weakness-evaluation guide](docs/benchmark.md) for scenario
+coverage, fairness controls, P0/P1/P2 thresholds, and artifact rules.
 
 ## Tool authority and correlation
 
@@ -226,6 +244,9 @@ still enforces any enterprise-managed policy installed by an administrator.
 - [Detailed implementation plan](docs/implementation-plan.md)
 - [Install and remove safely](docs/install.md)
 - [Troubleshooting and stable diagnostics](docs/troubleshooting.md)
+- [WebUI end-to-end testing](docs/web-e2e.md)
+- [Benchmark and weakness evaluation](docs/benchmark.md)
+- [Current benchmark report](reports/benchmark-2026-08-23.md)
 - [Authors and provenance](AUTHORS.md)
 
 ## License
