@@ -1,7 +1,9 @@
+import { cwd as processCwd } from 'node:process'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type { ContentBlock, GenerateOptions, Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
-import { CLAUDE_ERROR_CODES, claudeError, unsupportedInput } from './errors.js'
+import { CLAUDE_ERROR_CODES, claudeError, protocolError, unsupportedInput } from './errors.js'
 import { PROVIDER_ID } from './models.js'
+import { planColdStart } from './replay.js'
 
 function contentEqual(left: readonly ContentBlock[], right: readonly ContentBlock[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -43,9 +45,37 @@ export interface CommittedAssistant {
   readonly content: readonly ContentBlock[]
 }
 
+export type ClaudeStartPlan =
+  | { readonly mode: 'fresh' | 'degraded' }
+  | {
+      readonly mode: 'exact'
+      readonly resume: string
+      readonly resumeSessionAt: string
+      readonly forkSession: true
+    }
+
 export type LiveInputPlan =
-  | { readonly kind: 'prompt'; readonly messages: SDKUserMessage[] }
+  | {
+      readonly kind: 'prompt'
+      readonly messages: SDKUserMessage[]
+      readonly start?: ClaudeStartPlan
+    }
   | { readonly kind: 'tool-results'; readonly results: ToolResultBlock[] }
+
+export interface PrepareStepOptions {
+  readonly forceDegraded?: boolean
+}
+
+/** Enforce the Claude streaming-input contract at the final queue boundary. */
+export function assertSdkUserInput(message: SDKUserMessage): void {
+  const candidate = message as unknown as {
+    readonly type?: unknown
+    readonly message?: { readonly role?: unknown }
+  }
+  if (candidate.type !== 'user' || candidate.message?.role !== 'user') {
+    throw protocolError('Claude SDK streaming input must contain only user-role messages')
+  }
+}
 
 function toolResult(message: Message): ToolResultBlock {
   if (
@@ -71,7 +101,7 @@ export class LiveInputCursor {
   #prefix: readonly Message[] = []
   #assistant: CommittedAssistant | undefined
 
-  prepareStep(options: GenerateOptions): LiveInputPlan {
+  prepareStep(options: GenerateOptions, control: PrepareStepOptions = {}): LiveInputPlan {
     if (options.temperature !== undefined) {
       throw unsupportedInput('Claude Code does not expose DSH temperature control')
     }
@@ -86,6 +116,7 @@ export class LiveInputCursor {
     }
 
     let offset = 0
+    let start: ClaudeStartPlan | undefined
     if (this.#prefix.length > 0) {
       if (options.messages.length < this.#prefix.length) {
         throw claudeError(
@@ -119,11 +150,43 @@ export class LiveInputCursor {
         )
       }
       offset += 1
-    } else if (options.messages.some((message) => message.role !== 'user')) {
-      throw claudeError(
-        CLAUDE_ERROR_CODES.coldReplayUnsupported,
-        'a new Claude query cannot reconstruct pre-existing assistant or system history',
+    } else {
+      if (options.messages.length === 0) {
+        throw unsupportedInput('Claude generation requires new user content')
+      }
+      if (options.messages.at(-1)?.role !== 'user') {
+        throw unsupportedInput('Claude generation requires new user content after prior history')
+      }
+      const cold = planColdStart(
+        options.messages,
+        options.system,
+        processCwd(),
+        control.forceDegraded,
       )
+      if (cold.mode === 'degraded') {
+        return {
+          kind: 'prompt',
+          messages: [
+            {
+              type: 'user',
+              message: { role: 'user', content: [{ type: 'text', text: cold.text }] },
+              parent_tool_use_id: null,
+              shouldQuery: true,
+            },
+          ],
+          start: { mode: 'degraded' },
+        }
+      }
+      offset = options.messages.length - cold.pending.length
+      start =
+        cold.mode === 'exact'
+          ? {
+              mode: 'exact',
+              resume: cold.resume,
+              resumeSessionAt: cold.resumeSessionAt,
+              forkSession: true,
+            }
+          : { mode: 'fresh' }
     }
 
     const pending = options.messages.slice(offset)
@@ -134,7 +197,11 @@ export class LiveInputCursor {
     const sdkMessages = pending.map(userMessage)
     for (const message of sdkMessages.slice(0, -1)) message.shouldQuery = false
     sdkMessages.at(-1)!.shouldQuery = true
-    return { kind: 'prompt', messages: sdkMessages }
+    return {
+      kind: 'prompt',
+      messages: sdkMessages,
+      ...(start === undefined ? {} : { start }),
+    }
   }
 
   prepare(options: GenerateOptions): SDKUserMessage[] {

@@ -74,6 +74,21 @@ function textTurn(text: string, inputTokens: number, outputTokens: number): SDKM
   ]
 }
 
+function errorTurn(): SDKMessage[] {
+  return [
+    sdk({
+      type: 'result',
+      subtype: 'error_during_execution',
+      is_error: true,
+      stop_reason: null,
+      errors: ['No conversation found for resume target'],
+      modelUsage: {},
+      uuid: crypto.randomUUID(),
+      session_id: sdkSession,
+    }),
+  ]
+}
+
 function user(id: string, text: string): Message {
   return {
     id: id as never,
@@ -83,12 +98,17 @@ function user(id: string, text: string): Message {
   }
 }
 
-function assistant(id: string, text: string, model = 'default'): Message {
+function assistant(id: string, text: string, model = 'default', replayState?: unknown): Message {
   return {
     id: id as never,
     role: 'assistant',
     content: [{ type: 'text', text }],
-    source: { kind: 'model', provider: 'claude-code', model },
+    source: {
+      kind: 'model',
+      provider: 'claude-code',
+      model,
+      ...(replayState === undefined ? {} : { replayState }),
+    },
   }
 }
 
@@ -110,6 +130,15 @@ function request(
 async function collect(iterable: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
   const values: StreamChunk[] = []
   for await (const value of iterable) values.push(value)
+  return values
+}
+
+async function collectUntilFinish(iterable: AsyncIterable<StreamChunk>): Promise<StreamChunk[]> {
+  const values: StreamChunk[] = []
+  for await (const value of iterable) {
+    values.push(value)
+    if (value.type === 'finish') break
+  }
   return values
 }
 
@@ -141,6 +170,10 @@ class FakeQuery implements ClaudeQuery {
 
   emit(messages: readonly SDKMessage[]): void {
     for (const message of messages) this.output.push(message)
+  }
+
+  fail(error: unknown): void {
+    this.output.fail(error)
   }
 
   setModel(model: string): Promise<void> {
@@ -189,7 +222,11 @@ describe('per-session Claude bridge', () => {
     const fixture = harness((query) => query.emit(textTurn('hello', 7, 5)))
     const chunks = await collect(fixture.adapter.stream(request([user('u1', 'hi')], 'session-a')))
     expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toHaveLength(5)
-    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'stop' } })
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'stop' },
+      replayState: { response: { kind: 'dsh-claude-plugin/replay', phase: 'settled' } },
+    })
     expect(chunks.filter((chunk) => chunk.type === 'finish')).toHaveLength(1)
     expect(fixture.resolveExecutable).toHaveBeenCalledWith('claude', undefined, undefined)
     const sdkOptions = fixture.requests[0]?.options
@@ -244,6 +281,157 @@ describe('per-session Claude bridge', () => {
     await fixture.manager.dispose()
   })
 
+  it('commits a successful turn before a finish-first consumer stops iteration', async () => {
+    const fixture = harness((query, turn) =>
+      query.emit(turn === 0 ? textTurn('one', 1, 1) : textTurn('two', 2, 2)),
+    )
+    const u1 = user('u1', 'first')
+    const first = await collectUntilFinish(
+      fixture.adapter.stream(request([u1], 'finish-first-session')),
+    )
+    expect(first.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+
+    await collect(
+      fixture.adapter.stream(
+        request([u1, assistant('a1', 'one'), user('u2', 'second')], 'finish-first-session'),
+      ),
+    )
+    expect(fixture.queries).toHaveLength(1)
+    expect(fixture.queries[0]?.inputs).toHaveLength(2)
+    await fixture.manager.dispose()
+  })
+
+  it('cold-resumes an exact durable prefix by forking at the stored Claude entry', async () => {
+    const first = harness((query) => query.emit(textTurn('one', 10, 3)))
+    const u1 = user('u1', 'remember blue')
+    const firstChunks = await collect(first.adapter.stream(request([u1], 'session-a')))
+    const replayState = firstChunks.find((chunk) => chunk.type === 'finish')?.replayState
+    expect(replayState).toBeDefined()
+    await first.manager.dispose()
+
+    const resumed = harness((query) => query.emit(textTurn('two', 2, 2)))
+    const followUp = 'what did I ask you to remember?'
+    const u2 = user('u2', followUp)
+    const chunks = await collect(
+      resumed.adapter.stream(
+        request([u1, assistant('a1', 'one', 'default', replayState), u2], 'session-a'),
+      ),
+    )
+    expect(resumed.requests[0]?.options).toMatchObject({
+      resume: sdkSession,
+      forkSession: true,
+    })
+    expect(resumed.requests[0]?.options.resumeSessionAt).toMatch(/^[0-9a-f]{8}-[0-9a-f-]{27}$/)
+    expect(resumed.queries[0]?.inputs).toHaveLength(1)
+    expect(resumed.queries[0]?.inputs[0]?.message).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: followUp }],
+    })
+    expect(
+      chunks
+        .filter((chunk) => chunk.type === 'text-delta')
+        .map((chunk) => chunk.text)
+        .join(''),
+    ).toBe('two')
+    await resumed.manager.dispose()
+  })
+
+  it('falls back to degraded replay when an exact resume target is unavailable', async () => {
+    const seed = harness((query) => query.emit(textTurn('one', 1, 1)))
+    const u1 = user('u1', 'remember this')
+    const seedChunks = await collect(seed.adapter.stream(request([u1], 'session-a')))
+    const replayState = seedChunks.find((chunk) => chunk.type === 'finish')?.replayState
+    await seed.manager.dispose()
+
+    const recovered = harness((query, _turn, queryIndex) =>
+      query.emit(queryIndex === 0 ? errorTurn() : textTurn('recovered', 1, 1)),
+    )
+    const chunks = await collect(
+      recovered.adapter.stream(
+        request(
+          [u1, assistant('a1', 'one', 'default', replayState), user('u2', 'continue')],
+          'session-a',
+        ),
+      ),
+    )
+    expect(recovered.queries).toHaveLength(2)
+    expect(recovered.requests[0]?.options.resume).toBe(sdkSession)
+    expect(recovered.requests[1]?.options.resume).toBeUndefined()
+    expect(recovered.queries[1]?.inputs[0]?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('DSH degraded transcript replay'),
+    })
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await recovered.manager.dispose()
+  })
+
+  it('evicts only settled idle sessions and closes their live query', async () => {
+    vi.useFakeTimers()
+    try {
+      const fixture = harness(
+        (query) => query.emit(textTurn('idle', 1, 1)),
+        resolveConfig({ sessionIdleMs: 100 }),
+      )
+      await collect(fixture.adapter.stream(request([user('u1', 'go')], 'idle-session')))
+      expect(fixture.manager.activeBridgeCount).toBe(1)
+      expect(fixture.queries[0]?.closed).toBe(false)
+      await vi.advanceTimersByTimeAsync(101)
+      expect(fixture.manager.activeBridgeCount).toBe(0)
+      expect(fixture.queries[0]?.closed).toBe(true)
+      await fixture.manager.dispose()
+    } finally {
+      vi.useRealTimers()
+    }
+  })
+
+  it('retries one pre-observable transport crash with degraded durable history', async () => {
+    const fixture = harness((query, _turn, queryIndex) => {
+      if (queryIndex === 0) query.fail(new Error('fixture process crashed'))
+      else query.emit(textTurn('recovered', 1, 1))
+    })
+    const chunks = await collect(
+      fixture.adapter.stream(request([user('u1', 'recover this')], 'retry-session')),
+    )
+    expect(fixture.queries).toHaveLength(2)
+    expect(fixture.queries[0]?.closed).toBe(true)
+    expect(fixture.queries[1]?.inputs[0]?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('DSH degraded transcript replay'),
+    })
+    expect(chunks.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    await fixture.manager.dispose()
+  })
+
+  it('does not retry after any current-generation output became observable', async () => {
+    const fixture = harness((query) => {
+      query.emit([
+        envelope({
+          type: 'content_block_start',
+          index: 0,
+          content_block: { type: 'text', text: '', citations: null },
+        }),
+        envelope({
+          type: 'content_block_delta',
+          index: 0,
+          delta: { type: 'text_delta', text: 'visible' },
+        }),
+      ])
+      queueMicrotask(() => query.fail(new Error('crashed after output')))
+    })
+    const chunks = await collect(
+      fixture.adapter.stream(request([user('u1', 'do not duplicate')], 'observed-session')),
+    )
+    expect(fixture.queries).toHaveLength(1)
+    expect(chunks.filter((chunk) => chunk.type === 'text-delta')).toEqual([
+      { type: 'text-delta', index: 0, text: 'visible' },
+    ])
+    expect(chunks.at(-1)).toMatchObject({
+      type: 'finish',
+      reason: { kind: 'error', failure: { code: 'CLAUDE_TRANSPORT_ERROR' } },
+    })
+    await fixture.manager.dispose()
+  })
+
   it('isolates different DSH sessions into different SDK queries', async () => {
     const fixture = harness((query, _turn, queryIndex) =>
       query.emit(textTurn(`answer-${queryIndex}`, 1, 1)),
@@ -271,14 +459,18 @@ describe('per-session Claude bridge', () => {
     await vi.waitFor(() => expect(fixture.queries[0]?.inputs).toHaveLength(1))
     const second = collect(
       fixture.adapter.stream(
-        request([u1, assistant('a1', 'one'), user('u2', 'second')], 'session-a'),
+        request([u1, assistant('a1', 'one'), user('u2', 'second')], 'session-a', {
+          model: 'opus',
+        }),
       ),
     )
     await new Promise((resolve) => setTimeout(resolve, 10))
     expect(fixture.queries[0]?.inputs).toHaveLength(1)
+    expect(fixture.queries[0]?.models).toEqual([])
     releaseFirst()
     await Promise.all([first, second])
     expect(fixture.queries[0]?.inputs).toHaveLength(2)
+    expect(fixture.queries[0]?.models).toEqual(['opus'])
     await fixture.manager.dispose()
   })
 

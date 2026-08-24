@@ -21,10 +21,25 @@ ambient MCP servers, settings, hooks, plugins, and main-session skills remain
 disabled. Each MCP handler pauses until DSH executes the visible tool call and
 returns the exact correlated result; the same Claude query then resumes.
 
-This is the tool-bridge milestone, not the completed plugin. Text tool results
-are supported. Images, cold replay, idle eviction, doctor/install automation,
-and WebUI E2E arrive in later pull requests. Unsupported content or history
-fails closed with a stable diagnostic rather than silently bypassing DSH.
+The lifecycle milestone adds bounded session reuse and restart recovery. Every
+successful step carries a versioned replay anchor bound to the DSH prefix,
+assistant content, system prompt, working directory, safe Claude session/fork
+point, model, and cumulative usage snapshot. A matching cold continuation forks
+the stored Claude transcript and sends only new user input. Divergent, compacted,
+imported, or unavailable transcripts use one length-bounded canonical user-role
+replay envelope; assistant-role SDK input is never fabricated.
+
+Settled sessions are evicted after the configured idle interval. A query parked
+at a DSH-owned tool boundary is protected from idle eviction, but still obeys
+the tool-result timeout. Cancellation, timeout, process failure, and plugin
+disposal close the query and managed process tree. One retry is allowed only
+before the current generation emits any observable chunk.
+
+This is not the completed plugin. Text inputs and text tool results are
+supported. Images, rich tool results, doctor/install automation, authenticated
+WebUI E2E, and parity benchmarks arrive in later pull requests. Unsupported
+content or recovery state fails closed with a stable diagnostic rather than
+silently bypassing DSH.
 
 ## Requirements
 
@@ -90,16 +105,16 @@ a pinned Claude Code compatibility seam and must be reverified during upgrades.
 
 ## Configuration
 
-| Field                    | Default     | Meaning                                      |
-| ------------------------ | ----------- | -------------------------------------------- |
-| `claudeCommand`          | `claude`    | Bare host executable or absolute path        |
-| `executablePolicy`       | `host-only` | Host/bundled executable selection            |
-| `defaultModel`           | `sonnet`    | Target of the `default` model alias          |
-| `sessionIdleMs`          | 15 minutes  | Reserved for the session-lifecycle milestone |
-| `toolRoundTripTimeoutMs` | 30 minutes  | Maximum pause awaiting a DSH tool result     |
-| `shutdownGraceMs`        | 5 seconds   | Managed process shutdown grace               |
-| `passEnv`                | `[]`        | Explicit non-sensitive environment names     |
-| `debug`                  | `false`     | Safe transport diagnostics                   |
+| Field                    | Default     | Meaning                                                       |
+| ------------------------ | ----------- | ------------------------------------------------------------- |
+| `claudeCommand`          | `claude`    | Bare host executable or absolute path                         |
+| `executablePolicy`       | `host-only` | Host/bundled executable selection                             |
+| `defaultModel`           | `sonnet`    | Target of the `default` model alias                           |
+| `sessionIdleMs`          | 15 minutes  | Evict a settled live Claude query after this idle interval     |
+| `toolRoundTripTimeoutMs` | 30 minutes  | Maximum pause awaiting a DSH tool result                      |
+| `shutdownGraceMs`        | 5 seconds   | Managed process shutdown grace                                |
+| `passEnv`                | `[]`        | Explicit non-sensitive environment names                      |
+| `debug`                  | `false`     | Safe transport diagnostics                                    |
 
 The child receives SDK protocol facts, non-secret OS home/identity variables
 needed for Claude Code to locate its own authenticated profile, and explicitly

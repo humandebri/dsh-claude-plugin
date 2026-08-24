@@ -88,6 +88,7 @@ export class ClaudeOutputTranslator {
   #assistantError: SDKAssistantMessageError | undefined
   #messageStopReason: string | null | undefined
   #sessionId: string | undefined
+  #lastAssistantUuid: string | undefined
   #complete = false
   #terminalReason: FinishReason | undefined
 
@@ -103,6 +104,14 @@ export class ClaudeOutputTranslator {
 
   get terminalReason(): FinishReason | undefined {
     return this.#terminalReason
+  }
+
+  get sessionId(): string | undefined {
+    return this.#sessionId
+  }
+
+  get lastAssistantUuid(): string | undefined {
+    return this.#lastAssistantUuid
   }
 
   get toolCalls(): readonly Extract<ContentBlock, { type: 'tool-call' }>[] {
@@ -267,6 +276,7 @@ export class ClaudeOutputTranslator {
         'Claude emitted a subagent assistant message while native tools were disabled',
       )
     }
+    this.#lastAssistantUuid = message.uuid
     this.#assistantError ??= message.error
     for (const block of message.message.content) {
       if (block.type === 'text') this.#completed.push({ type: 'text', text: block.text })
