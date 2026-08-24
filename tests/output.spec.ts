@@ -136,6 +136,41 @@ describe('Claude output translation', () => {
     })
   })
 
+  it('maps available thinking-token detail while retaining cost telemetry off-stream', () => {
+    const tracker = new UsageTracker()
+    const translator = new ClaudeOutputTranslator(tracker)
+    const chunks = translator.accept(
+      result({
+        total_cost_usd: 0.02,
+        usage: { output_tokens_details: { thinking_tokens: 2 } },
+        modelUsage: {
+          sonnet: {
+            inputTokens: 5,
+            outputTokens: 4,
+            cacheReadInputTokens: 0,
+            cacheCreationInputTokens: 0,
+            costUSD: 0.02,
+          },
+        },
+      }),
+    )
+    expect(chunks[0]).toEqual({
+      type: 'usage',
+      usage: {
+        inputTokens: 5,
+        outputTokens: 4,
+        cacheReadTokens: 0,
+        cacheWriteTokens: 0,
+        reasoningTokens: 2,
+      },
+    })
+    expect(tracker.telemetryDelta).toEqual({
+      reasoningTokens: 2,
+      costUsd: 0.02,
+      queryCostUsd: 0.02,
+    })
+  })
+
   it('streams a DSH MCP call with raw JSON arguments and stops at the tool boundary', () => {
     const translator = new ClaudeOutputTranslator(new UsageTracker())
     const chunks = acceptAll(translator, [

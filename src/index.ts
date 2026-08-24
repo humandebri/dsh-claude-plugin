@@ -10,7 +10,8 @@ import type {
   StreamChunk,
 } from '@deepseek-ai/dsh-llm'
 import { SENSITIVE_ENV_PATTERN } from '@deepseek-ai/dsh-subprocess'
-import { BridgeManager } from './bridge.js'
+import { BridgeManager, defaultQueryFactory } from './bridge.js'
+import { ClaudeDiagnostics } from './diagnostics.js'
 import {
   abortError,
   ClaudePluginError,
@@ -30,6 +31,8 @@ import {
 export * from './errors.js'
 export * from './models.js'
 export * from './bridge.js'
+export * from './content.js'
+export * from './diagnostics.js'
 export * from './input.js'
 export * from './output.js'
 export * from './process.js'
@@ -37,9 +40,10 @@ export * from './replay.js'
 export * from './pending-tools.js'
 export * from './tool-server.js'
 export * from './usage.js'
+export * from './json.js'
 
 export const name = 'dsh-claude-plugin'
-export const inject = ['llm', 'subprocess']
+export const inject = ['llm', 'subprocess', 'attachments']
 
 export const DEFAULT_CLAUDE_COMMAND = 'claude'
 export const DEFAULT_EXECUTABLE_POLICY = 'host-only'
@@ -217,7 +221,13 @@ export class ClaudeCodeAdapter extends LlmAdapter {
 
 export function apply(ctx: Context, config: Config = {}): void {
   const resolved = resolveConfig(config)
-  const bridges = new BridgeManager(ctx.subprocess, resolved)
+  const bridges = new BridgeManager(
+    ctx.subprocess,
+    resolved,
+    defaultQueryFactory,
+    ctx.attachments,
+    new ClaudeDiagnostics(resolved.debug, ctx.logger(name)),
+  )
   ctx.effect(() => () => bridges.dispose(), 'dsh-claude-plugin: bridge teardown')
   ctx.llm.registerAdapter([PROVIDER_ID], new ClaudeCodeAdapter(resolved, bridges))
 }

@@ -21,9 +21,9 @@ function options(messages: Message[], extra: Partial<GenerateOptions> = {}): Gen
 }
 
 describe('live SDK input cursor', () => {
-  it('submits multiple user frames with only the final frame triggering a query', () => {
+  it('submits multiple user frames with only the final frame triggering a query', async () => {
     const cursor = new LiveInputCursor()
-    const prepared = cursor.prepare(
+    const prepared = await cursor.prepare(
       options([message('a', 'user', 'context'), message('b', 'user', 'go')]),
     )
     expect(prepared.map((entry) => entry.shouldQuery)).toEqual([false, true])
@@ -33,10 +33,10 @@ describe('live SDK input cursor', () => {
     })
   })
 
-  it('accepts an exact mirrored assistant response before the next user message', () => {
+  it('accepts an exact mirrored assistant response before the next user message', async () => {
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'first')]
-    cursor.prepare(options(first))
+    await cursor.prepare(options(first))
     cursor.commit(first, {
       model: 'default',
       content: [{ type: 'text', text: 'answer' }],
@@ -47,13 +47,13 @@ describe('live SDK input cursor', () => {
       model: 'default',
     })
     expect(
-      cursor.prepare(options([...first, assistant, message('u2', 'user', 'second')])),
+      await cursor.prepare(options([...first, assistant, message('u2', 'user', 'second')])),
     ).toHaveLength(1)
   })
 
-  it('degrades cold history and fails closed on divergent live history', () => {
+  it('degrades cold history and fails closed on divergent live history', async () => {
     const cold = new LiveInputCursor()
-    const degraded = cold.prepareStep(
+    const degraded = await cold.prepareStep(
       options([
         message('old', 'assistant', 'old', {
           kind: 'model',
@@ -71,9 +71,9 @@ describe('live SDK input cursor', () => {
 
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'first')]
-    cursor.prepare(options(first))
+    await cursor.prepare(options(first))
     cursor.commit(first, { model: 'default', content: [{ type: 'text', text: 'answer' }] })
-    expect(() =>
+    await expect(
       cursor.prepare(
         options([
           message('u1', 'user', 'changed'),
@@ -85,8 +85,8 @@ describe('live SDK input cursor', () => {
           message('u2', 'user', 'next'),
         ]),
       ),
-    ).toThrow(/diverged/)
-    expect(() =>
+    ).rejects.toThrow(/diverged/)
+    await expect(
       cursor.prepare(
         options([
           ...first,
@@ -98,11 +98,11 @@ describe('live SDK input cursor', () => {
           message('u2', 'user', 'next'),
         ]),
       ),
-    ).toThrow(/exact assistant response/)
+    ).rejects.toThrow(/exact assistant response/)
   })
 
-  it('never reconstructs history with assistant-role SDK input', () => {
-    const prepared = new LiveInputCursor().prepareStep(
+  it('never reconstructs history with assistant-role SDK input', async () => {
+    const prepared = await new LiveInputCursor().prepareStep(
       options([
         message('old', 'assistant', 'old answer', {
           kind: 'model',
@@ -126,31 +126,31 @@ describe('live SDK input cursor', () => {
     ).toThrowError(expect.objectContaining({ code: 'CLAUDE_PROTOCOL_ERROR' }))
   })
 
-  it.each([
-    { temperature: 0 },
-    { maxTokens: 100 },
-    { stop: ['END'] },
-    { reasoningEffort: 'high' as never },
-  ])('rejects controls not owned by the Claude transport: %#', (extra) => {
-    expect(() =>
-      new LiveInputCursor().prepare(options([message('u', 'user', 'go')], extra)),
-    ).toThrow(/not enabled|does not expose|not enabled/)
-  })
+  it.each([{ temperature: 0 }, { maxTokens: 100 }, { stop: ['END'] }])(
+    'rejects controls not owned by the Claude transport: %#',
+    async (extra) => {
+      await expect(
+        new LiveInputCursor().prepare(options([message('u', 'user', 'go')], extra)),
+      ).rejects.toThrow(/does not expose/)
+    },
+  )
 
-  it('accepts exact DSH tool results as an MCP resume plan without a user prompt', () => {
+  it('accepts exact DSH tool results as an MCP resume plan without a user prompt', async () => {
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'read the fixture')]
     expect(
-      cursor.prepareStep(
-        options(first, {
-          tools: [
-            {
-              name: 'read',
-              description: 'read a fixture',
-              parameters: { type: 'object', properties: {} },
-            },
-          ],
-        }),
+      (
+        await cursor.prepareStep(
+          options(first, {
+            tools: [
+              {
+                name: 'read',
+                description: 'read a fixture',
+                parameters: { type: 'object', properties: {} },
+              },
+            ],
+          }),
+        )
       ).kind,
     ).toBe('prompt')
     const toolCall = {
@@ -183,17 +183,19 @@ describe('live SDK input cursor', () => {
       ],
       source: { kind: 'tool', callId: 'toolu_read_1' as never },
     }
-    expect(cursor.prepareStep(options([...first, assistant, toolResult]))).toEqual({
+    expect(await cursor.prepareStep(options([...first, assistant, toolResult]))).toEqual({
       kind: 'tool-results',
       results: toolResult.content,
     })
-    expect(() => cursor.prepare(options([...first, assistant, toolResult]))).toThrow(/resume/)
+    await expect(cursor.prepare(options([...first, assistant, toolResult]))).rejects.toThrow(
+      /resume/,
+    )
   })
 
-  it('rejects malformed DSH tool-result continuation messages', () => {
+  it('rejects malformed DSH tool-result continuation messages', async () => {
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'use a tool')]
-    cursor.prepare(options(first))
+    await cursor.prepare(options(first))
     const call = {
       type: 'tool-call' as const,
       id: 'toolu_1' as never,
@@ -224,50 +226,43 @@ describe('live SDK input cursor', () => {
       { ...valid, source: { kind: 'user' as const } },
       { ...valid, content: [] },
       { ...valid, source: { kind: 'tool' as const, callId: 'other' as never } },
-      {
-        ...valid,
-        content: [
-          {
-            ...valid.content[0],
-            content: [{ type: 'reasoning' as const, text: 'hidden' }],
-          },
-        ],
-      },
     ]) {
-      expect(() => cursor.prepareStep(options([...first, assistant, invalid as Message]))).toThrow(
-        /tool boundary|correlation|content/,
-      )
+      await expect(
+        cursor.prepareStep(options([...first, assistant, invalid as Message])),
+      ).rejects.toThrow(/tool boundary|correlation|content/)
     }
   })
 
-  it('rejects empty and non-text user content', () => {
+  it('rejects empty and non-text user content', async () => {
     const base = message('u', 'user', 'go')
-    expect(() => new LiveInputCursor().prepare(options([{ ...base, content: [] }]))).toThrow(
-      /no text content/,
-    )
-    expect(() =>
+    await expect(
+      new LiveInputCursor().prepare(options([{ ...base, content: [] }])),
+    ).rejects.toThrow(/no content/)
+    await expect(
       new LiveInputCursor().prepare(
         options([{ ...base, content: [{ type: 'reasoning', text: 'hidden' }] }]),
       ),
-    ).toThrow(/unsupported/)
+    ).rejects.toThrow(/unsupported/)
   })
 
-  it('rejects a shortened live prefix, no new content, and an assistant in the pending suffix', () => {
+  it('rejects a shortened live prefix, no new content, and an assistant in the pending suffix', async () => {
     const cursor = new LiveInputCursor()
     const first = [message('u1', 'user', 'first'), message('u2', 'user', 'second')]
-    cursor.prepare(options(first))
+    await cursor.prepare(options(first))
     cursor.commit(first, { model: 'default', content: [{ type: 'text', text: 'answer' }] })
-    expect(() => cursor.prepare(options(first.slice(0, 1)))).toThrow(/history is shorter/)
+    await expect(cursor.prepare(options(first.slice(0, 1)))).rejects.toThrow(/history is shorter/)
     const mirrored = message('a1', 'assistant', 'answer', {
       kind: 'model',
       provider: 'claude-code',
       model: 'default',
     })
-    expect(() => cursor.prepare(options([...first, mirrored]))).toThrow(/requires new user content/)
-    expect(() => new LiveInputCursor().prepare(options([mirrored]))).toThrow(
+    await expect(cursor.prepare(options([...first, mirrored]))).rejects.toThrow(
       /requires new user content/,
     )
-    expect(() =>
+    await expect(new LiveInputCursor().prepare(options([mirrored]))).rejects.toThrow(
+      /requires new user content/,
+    )
+    await expect(
       cursor.prepare(
         options([
           ...first,
@@ -279,6 +274,6 @@ describe('live SDK input cursor', () => {
           }),
         ]),
       ),
-    ).toThrow(/only user messages/)
+    ).rejects.toThrow(/only non-tool user messages/)
   })
 })

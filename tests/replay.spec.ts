@@ -188,14 +188,28 @@ describe('durable Claude replay planning', () => {
     ).toThrowError(expect.objectContaining({ code: 'CLAUDE_IN_FLIGHT_RECOVERY_UNSUPPORTED' }))
   })
 
-  it('bounds degraded history and rejects content not yet representable', () => {
+  it('bounds degraded history and preserves durable image descriptors without bytes', () => {
     const oversized = user('large', 'x'.repeat(MAX_DEGRADED_REPLAY_BYTES))
     expect(() => degradedReplayText([oversized])).toThrow(/exceeds/)
     const image: Message = {
       ...user('image', 'unused'),
-      content: [{ type: 'image', attachment: {} as never }],
+      content: [
+        {
+          type: 'image',
+          attachment: {
+            attachmentId: 'sha256:fixture' as never,
+            mediaType: 'image/png',
+            bytes: 68,
+            width: 1,
+            height: 1,
+          },
+        },
+      ],
     }
-    expect(() => degradedReplayText([image])).toThrow(/image history/)
+    const replay = degradedReplayText([image])
+    expect(replay).toContain('sha256:fixture')
+    expect(replay).toContain('"mediaType":"image/png"')
+    expect(replay).not.toContain('base64')
   })
 
   it('uses a fresh query for user-only history and omits replay state without safe UUIDs', () => {

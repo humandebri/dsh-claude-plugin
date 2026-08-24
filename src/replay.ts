@@ -94,7 +94,17 @@ function projectedBlock(block: ContentBlock, options: ReplayProjectionOptions): 
         ...(block.isError === undefined ? {} : { isError: block.isError }),
       }
     case 'image':
-      throw coldReplayUnsupported('image history is not representable before the content milestone')
+      return {
+        type: 'image',
+        attachment: {
+          attachmentId: String(block.attachment.attachmentId),
+          mediaType: block.attachment.mediaType,
+          bytes: block.attachment.bytes,
+          width: block.attachment.width,
+          height: block.attachment.height,
+          ...(block.attachment.name === undefined ? {} : { name: block.attachment.name }),
+        },
+      }
     default:
       throw coldReplayUnsupported(
         `history contains unsupported content block ${JSON.stringify((block as ContentBlock).type)}`,

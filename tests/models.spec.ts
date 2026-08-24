@@ -4,6 +4,7 @@ import {
   modelCatalog,
   PROVIDER_ID,
   resolvedModelInfo,
+  resolveClaudeEffort,
   resolveClaudeModel,
   validateModelId,
 } from '../src/index.js'
@@ -16,7 +17,7 @@ describe('Claude model aliases', () => {
       provider: PROVIDER_ID,
       id: 'default',
       name: 'Claude Opus (default)',
-      inputModalities: ['text'],
+      inputModalities: ['text', 'image'],
     })
     expect(Object.isFrozen(models)).toBe(true)
     expect(modelCatalog('claude-opus-4-1')[0]?.name).toBe('claude-opus-4-1 (default)')
@@ -42,7 +43,16 @@ describe('Claude model aliases', () => {
       id: 'sonnet',
       name: 'Claude Sonnet',
       description: 'Claude Code model sonnet',
+      reasoning: {
+        efforts: [{ id: 'low' }, { id: 'medium' }, { id: 'high' }],
+      },
     })
+  })
+
+  it('maps the conservative Claude effort vocabulary and rejects unsupported levels', () => {
+    expect(resolveClaudeEffort(undefined)).toBeUndefined()
+    expect(resolveClaudeEffort('medium')).toBe('medium')
+    expect(() => resolveClaudeEffort('max')).toThrow(/low, medium, high/)
   })
 
   it.each(['', ' sonnet', 'sonnet ', 'line\nbreak', 'x'.repeat(257)])(

@@ -319,7 +319,12 @@ export class ClaudeOutputTranslator {
 
   #result(message: SDKResultMessage): StreamChunk[] {
     if (this.#open.size > 0) throw protocolError('Claude result arrived with open content blocks')
-    const chunks: StreamChunk[] = [{ type: 'usage', usage: this.usage.delta(message.modelUsage) }]
+    const chunks: StreamChunk[] = [
+      {
+        type: 'usage',
+        usage: this.usage.delta(message.modelUsage, message.usage, message.total_cost_usd),
+      },
+    ]
     const maxTokens =
       this.#assistantError === 'max_output_tokens' || message.stop_reason === 'max_tokens'
     if (maxTokens) {

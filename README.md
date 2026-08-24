@@ -12,9 +12,10 @@ Developed by [snowan](https://github.com/snowan) with Codex assistance.
 ## Status
 
 The package registers the `claude-code` provider and runs Claude turns through
-the pinned Claude Agent SDK and DSH's managed subprocess service. It streams
-text, thinking, raw tool calls, per-turn usage, and one terminal result while
-retaining one serialized SDK query per live DSH session.
+the pinned Claude Agent SDK and DSH's managed subprocess and attachment
+services. It streams text, thinking, raw tool calls, per-turn token usage, and
+one terminal result while retaining one serialized SDK query per live DSH
+session. The route advertises text and image input.
 
 DSH tools are exposed through one in-process MCP server. Claude's native tools,
 ambient MCP servers, settings, hooks, plugins, and main-session skills remain
@@ -35,11 +36,17 @@ the tool-result timeout. Cancellation, timeout, process failure, and plugin
 disposal close the query and managed process tree. One retry is allowed only
 before the current generation emits any observable chunk.
 
-This is not the completed plugin. Text inputs and text tool results are
-supported. Images, rich tool results, doctor/install automation, authenticated
+The content milestone preserves PNG, JPEG, WebP, and GIF prompt images from
+DSH's durable attachment store. DSH tool results can return MCP text, image,
+embedded-resource, resource-link, structured, and explicit error content.
+Claude thinking is retained as DSH reasoning when the selected model exposes
+it, and `low`, `medium`, and `high` effort can be selected through DSH model
+configuration.
+
+This is not the completed plugin. Doctor/install automation, authenticated
 WebUI E2E, and parity benchmarks arrive in later pull requests. Unsupported
 content or recovery state fails closed with a stable diagnostic rather than
-silently bypassing DSH.
+being silently dropped or bypassing DSH.
 
 ## Requirements
 
@@ -84,8 +91,8 @@ row. Later user/profile patches retain precedence. To remove it:
 dsh plugin --profile web remove dsh-claude-plugin
 ```
 
-The current route supports Standard-style text and DSH tool turns. Treat it as
-pre-release until the authenticated tool E2E and later lifecycle/WebUI gates in
+The current route supports Standard-style text, image, and DSH tool turns.
+Treat it as pre-release until the authenticated tool, replay, and WebUI gates in
 the implementation plan pass.
 
 ## Tool authority and correlation
@@ -103,6 +110,53 @@ closes the session with `CLAUDE_TOOL_PROTOCOL_ERROR` or
 `CLAUDE_TOOL_TIMEOUT`; it never guesses by name or call order. This metadata is
 a pinned Claude Code compatibility seam and must be reverified during upgrades.
 
+## Content, reasoning, and telemetry
+
+Prompt images remain durable DSH attachment references in history. Immediately
+before a Claude request, the adapter asks `ctx.attachments` for a verified,
+route-sized request variant and converts only that variant to SDK base64. It
+does not persist base64, paths, provider URLs, or temporary URLs in replay
+state. The adapter applies the tighter of DSH's deployment limits and these
+Claude-side bounds:
+
+- 20 images per request;
+- 8,000 pixels on either dimension;
+- 64 million pixels;
+- 10 MiB after base64 encoding.
+
+The same resolver preserves image tool results as MCP image blocks. DSH core
+`text` and `image` blocks are supported directly. Merge-extensible tool-result
+blocks may also use MCP-compatible `resource`, `resource-link` (or
+`resource_link`), `structured { value | data }`, and `error { message }`
+shapes. Inline structured/resource extensions are capped at 1 MiB and validated
+against the current MCP result schema. Unknown content fails with
+`CLAUDE_UNSUPPORTED_INPUT` or `CLAUDE_TOOL_PROTOCOL_ERROR`.
+
+The adapter conservatively advertises `low`, `medium`, and `high` reasoning
+effort for stable Claude aliases. It does not advertise `xhigh` or `max`, whose
+availability depends on the concrete model behind an alias. Thinking blocks
+emitted by Claude are preserved as DSH reasoning blocks; if Claude emits no
+thinking, the adapter fabricates none.
+
+DSH's usage chunk has token fields but no cost field. The adapter therefore:
+
+- emits validated disjoint input, output, cache-read, cache-write, and available
+  main-loop thinking-token deltas through DSH;
+- retains cumulative per-model SDK counters, model/provider facts, and estimated
+  USD cost in adapter replay telemetry;
+- includes cost deltas and cumulative totals in redacted debug diagnostics.
+
+Claude SDK cost is an estimate, not a billing statement. At an MCP tool pause,
+the SDK has not produced its terminal result yet, so accounting for that model
+call appears with the next result after DSH returns the tool output. No cost is
+invented for DSH surfaces that expose only `TokenUsage`.
+
+With `debug: true`, each generation gets one UUID correlation ID. Diagnostic
+records are capped at 4 KiB and contain hashes, counts, timing, stable error
+codes, and usage totals. They exclude prompts, system text, raw session IDs,
+tool names/arguments/results, attachment bytes, environment values, and error
+messages. `debug: false` emits no plugin diagnostic records.
+
 ## Configuration
 
 | Field                    | Default     | Meaning                                                       |
@@ -114,7 +168,7 @@ a pinned Claude Code compatibility seam and must be reverified during upgrades.
 | `toolRoundTripTimeoutMs` | 30 minutes  | Maximum pause awaiting a DSH tool result                      |
 | `shutdownGraceMs`        | 5 seconds   | Managed process shutdown grace                                |
 | `passEnv`                | `[]`        | Explicit non-sensitive environment names                      |
-| `debug`                  | `false`     | Safe transport diagnostics                                    |
+| `debug`                  | `false`     | Bounded, redacted correlation and telemetry diagnostics       |
 
 The child receives SDK protocol facts, non-secret OS home/identity variables
 needed for Claude Code to locate its own authenticated profile, and explicitly

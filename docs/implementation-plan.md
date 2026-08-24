@@ -232,6 +232,16 @@ Branch: `michi/content-fidelity`
 Supported rich content is preserved end to end; unsupported content fails with
 an actionable error instead of being dropped.
 
+### Implemented contract note
+
+The DSH usage stream has no cost field, so PR 6 emits every available token
+bucket there and retains estimated per-model/query cost only in adapter replay
+telemetry and opt-in redacted diagnostics. A tool-pause step has no SDK result
+until DSH resolves the parked MCP handler; its cumulative accounting is
+therefore reported by the following result. Stable aliases advertise only
+`low`, `medium`, and `high` effort because `xhigh` and `max` support varies with
+the concrete model selected by Claude Code.
+
 ## PR 7 — Doctor, installation, and profile safety
 
 Branch: `michi/doctor-install`
