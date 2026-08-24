@@ -11,7 +11,7 @@ This measures adapter parity and overhead. It does not include WebUI/network
 latency; the separate [WebUI end-to-end suite](web-e2e.md) proves the packed
 plugin through DSH's public Web/RPC entry path and real Chromium.
 
-The [current benchmark report](../reports/benchmark-2026-08-23.md) records the
+The [current benchmark report](../reports/benchmark-2026-08-24.md) records the
 latest verified result, including an explicit incomplete state when the
 authenticated gate cannot run.
 

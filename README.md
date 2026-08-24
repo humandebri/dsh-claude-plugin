@@ -246,7 +246,7 @@ still enforces any enterprise-managed policy installed by an administrator.
 - [Troubleshooting and stable diagnostics](docs/troubleshooting.md)
 - [WebUI end-to-end testing](docs/web-e2e.md)
 - [Benchmark and weakness evaluation](docs/benchmark.md)
-- [Current benchmark report](reports/benchmark-2026-08-23.md)
+- [Current benchmark report](reports/benchmark-2026-08-24.md)
 - [Authors and provenance](AUTHORS.md)
 
 ## License
