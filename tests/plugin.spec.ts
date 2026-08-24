@@ -9,6 +9,7 @@ import type {
   SubprocessTerminalSpawnSpec,
 } from '@deepseek-ai/dsh-subprocess'
 import * as claudePlugin from '../src/index.js'
+import type { ClaudeQueryFactory } from '../src/index.js'
 
 class FakeSubprocessRuntime extends SubprocessRuntime {
   override resolveExecutable(command: string): Promise<string> {
@@ -48,21 +49,36 @@ describe('DSH plugin registration', () => {
       { id: 'opus' },
       { id: 'haiku' },
     ])
-    const adapter = new claudePlugin.ClaudeCodeAdapter(claudePlugin.resolveConfig())
+    const adapter = new claudePlugin.ClaudeCodeAdapter(
+      claudePlugin.resolveConfig(),
+      new claudePlugin.BridgeManager(ctx.subprocess, claudePlugin.resolveConfig()),
+    )
     expect(adapter.providerInfo('other')).toEqual({ id: 'other', name: 'other' })
 
     await fiber.dispose()
     expect(ctx.llm.listProviders()).toEqual([])
   })
 
-  it('returns one deliberate terminal failure instead of hanging or spawning', async () => {
+  it('normalizes a synchronous SDK transport failure to one terminal finish', async () => {
     const ctx = await setup()
-    await ctx.plugin(claudePlugin, {})
+    const queryFactory: ClaudeQueryFactory = () => {
+      throw new Error('fixture transport failed')
+    }
+    const resolved = claudePlugin.resolveConfig()
+    const bridges = new claudePlugin.BridgeManager(ctx.subprocess, resolved, queryFactory)
+    ctx.llm.registerAdapter(['claude-code'], new claudePlugin.ClaudeCodeAdapter(resolved, bridges))
     const chunks = []
     for await (const chunk of ctx.llm.stream({
       provider: 'claude-code',
       model: 'default',
-      messages: [],
+      messages: [
+        {
+          id: 'fixture-message' as never,
+          role: 'user',
+          content: [{ type: 'text', text: 'hello' }],
+          source: { kind: 'user' },
+        },
+      ],
     })) {
       chunks.push(chunk)
     }
@@ -73,8 +89,8 @@ describe('DSH plugin registration', () => {
         reason: {
           kind: 'error',
           failure: expect.objectContaining({
-            code: 'CLAUDE_TRANSPORT_NOT_IMPLEMENTED',
-            message: expect.stringContaining('managed SDK transport milestone'),
+            code: 'CLAUDE_TRANSPORT_ERROR',
+            message: 'dsh-claude-plugin: unexpected Claude transport failure',
           }),
         },
       },

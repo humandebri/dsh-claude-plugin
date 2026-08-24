@@ -1,0 +1,151 @@
+import { describe, expect, it } from 'vitest'
+import type { GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import { LiveInputCursor } from '../src/input.js'
+
+function message(
+  id: string,
+  role: Message['role'],
+  text: string,
+  source: Message['source'] = { kind: 'user' },
+): Message {
+  return {
+    id: id as never,
+    role,
+    content: [{ type: 'text', text }],
+    source,
+  }
+}
+
+function options(messages: Message[], extra: Partial<GenerateOptions> = {}): GenerateOptions {
+  return { provider: 'claude-code', model: 'default', messages, ...extra }
+}
+
+describe('live SDK input cursor', () => {
+  it('submits multiple user frames with only the final frame triggering a query', () => {
+    const cursor = new LiveInputCursor()
+    const prepared = cursor.prepare(
+      options([message('a', 'user', 'context'), message('b', 'user', 'go')]),
+    )
+    expect(prepared.map((entry) => entry.shouldQuery)).toEqual([false, true])
+    expect(prepared[0]?.message).toEqual({
+      role: 'user',
+      content: [{ type: 'text', text: 'context' }],
+    })
+  })
+
+  it('accepts an exact mirrored assistant response before the next user message', () => {
+    const cursor = new LiveInputCursor()
+    const first = [message('u1', 'user', 'first')]
+    cursor.prepare(options(first))
+    cursor.commit(first, {
+      model: 'default',
+      content: [{ type: 'text', text: 'answer' }],
+    })
+    const assistant = message('a1', 'assistant', 'answer', {
+      kind: 'model',
+      provider: 'claude-code',
+      model: 'default',
+    })
+    expect(
+      cursor.prepare(options([...first, assistant, message('u2', 'user', 'second')])),
+    ).toHaveLength(1)
+  })
+
+  it('fails closed on cold, divergent, or mismatched assistant history', () => {
+    const cold = new LiveInputCursor()
+    expect(() =>
+      cold.prepare(
+        options([
+          message('old', 'assistant', 'old', {
+            kind: 'model',
+            provider: 'claude-code',
+            model: 'default',
+          }),
+          message('new', 'user', 'new'),
+        ]),
+      ),
+    ).toThrow(/cannot reconstruct/)
+
+    const cursor = new LiveInputCursor()
+    const first = [message('u1', 'user', 'first')]
+    cursor.prepare(options(first))
+    cursor.commit(first, { model: 'default', content: [{ type: 'text', text: 'answer' }] })
+    expect(() =>
+      cursor.prepare(
+        options([
+          message('u1', 'user', 'changed'),
+          message('a1', 'assistant', 'answer', {
+            kind: 'model',
+            provider: 'claude-code',
+            model: 'default',
+          }),
+          message('u2', 'user', 'next'),
+        ]),
+      ),
+    ).toThrow(/diverged/)
+    expect(() =>
+      cursor.prepare(
+        options([
+          ...first,
+          message('a1', 'assistant', 'wrong', {
+            kind: 'model',
+            provider: 'claude-code',
+            model: 'default',
+          }),
+          message('u2', 'user', 'next'),
+        ]),
+      ),
+    ).toThrow(/exact assistant response/)
+  })
+
+  it.each([
+    { tools: [{ name: 'read', description: 'read', parameters: {} }] },
+    { temperature: 0 },
+    { maxTokens: 100 },
+    { stop: ['END'] },
+    { reasoningEffort: 'high' as never },
+  ])('rejects controls not owned by the PR 3 transport: %#', (extra) => {
+    expect(() =>
+      new LiveInputCursor().prepare(options([message('u', 'user', 'go')], extra)),
+    ).toThrow(/not enabled|does not expose|not enabled/)
+  })
+
+  it('rejects empty and non-text user content', () => {
+    const base = message('u', 'user', 'go')
+    expect(() => new LiveInputCursor().prepare(options([{ ...base, content: [] }]))).toThrow(
+      /no text content/,
+    )
+    expect(() =>
+      new LiveInputCursor().prepare(
+        options([{ ...base, content: [{ type: 'reasoning', text: 'hidden' }] }]),
+      ),
+    ).toThrow(/unsupported/)
+  })
+
+  it('rejects a shortened live prefix, no new content, and an assistant in the pending suffix', () => {
+    const cursor = new LiveInputCursor()
+    const first = [message('u1', 'user', 'first'), message('u2', 'user', 'second')]
+    cursor.prepare(options(first))
+    cursor.commit(first, { model: 'default', content: [{ type: 'text', text: 'answer' }] })
+    expect(() => cursor.prepare(options(first.slice(0, 1)))).toThrow(/history is shorter/)
+    const mirrored = message('a1', 'assistant', 'answer', {
+      kind: 'model',
+      provider: 'claude-code',
+      model: 'default',
+    })
+    expect(() => cursor.prepare(options([...first, mirrored]))).toThrow(/requires new user content/)
+    expect(() =>
+      cursor.prepare(
+        options([
+          ...first,
+          mirrored,
+          message('a2', 'assistant', 'unexpected', {
+            kind: 'model',
+            provider: 'claude-code',
+            model: 'default',
+          }),
+        ]),
+      ),
+    ).toThrow(/only user messages/)
+  })
+})

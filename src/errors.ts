@@ -1,10 +1,20 @@
 import { LlmError } from '@deepseek-ai/dsh-llm'
 
 export const CLAUDE_ERROR_CODES = {
+  aborted: 'CLAUDE_ABORTED',
+  authenticationFailed: 'CLAUDE_AUTHENTICATION_FAILED',
+  coldReplayUnsupported: 'CLAUDE_COLD_REPLAY_UNSUPPORTED',
+  executableNotFound: 'CLAUDE_EXECUTABLE_NOT_FOUND',
   invalidConfig: 'CLAUDE_INVALID_CONFIG',
   invalidModel: 'CLAUDE_INVALID_MODEL',
   invalidProvider: 'CLAUDE_INVALID_PROVIDER',
+  modelNotFound: 'CLAUDE_MODEL_NOT_FOUND',
+  protocolError: 'CLAUDE_PROTOCOL_ERROR',
+  rateLimited: 'CLAUDE_RATE_LIMITED',
+  transportError: 'CLAUDE_TRANSPORT_ERROR',
   transportNotImplemented: 'CLAUDE_TRANSPORT_NOT_IMPLEMENTED',
+  unsupportedInput: 'CLAUDE_UNSUPPORTED_INPUT',
+  usageEpochReset: 'CLAUDE_USAGE_EPOCH_RESET',
 } as const
 
 export type ClaudeErrorCode = (typeof CLAUDE_ERROR_CODES)[keyof typeof CLAUDE_ERROR_CODES]
@@ -19,6 +29,30 @@ export class ClaudePluginError extends LlmError {
 
 export function invalidConfig(message: string, cause?: unknown): ClaudePluginError {
   return new ClaudePluginError(CLAUDE_ERROR_CODES.invalidConfig, message, cause)
+}
+
+export function claudeError(
+  code: ClaudeErrorCode,
+  message: string,
+  cause?: unknown,
+): ClaudePluginError {
+  return new ClaudePluginError(code, message, cause)
+}
+
+export function abortError(cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.aborted, 'Claude generation was aborted', cause)
+}
+
+export function unsupportedInput(message: string): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.unsupportedInput, message)
+}
+
+export function protocolError(message: string, cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.protocolError, message, cause)
+}
+
+export function transportError(message: string, cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.transportError, message, cause)
 }
 
 export function transportNotImplemented(model: string): ClaudePluginError {
