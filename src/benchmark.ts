@@ -181,6 +181,13 @@ export function digestBenchmarkText(text: string): BenchmarkOutputDigest {
   })
 }
 
+export function benchmarkTerminalSuccess(
+  failureCode: string | undefined,
+  correctnessPass: boolean,
+): boolean {
+  return failureCode === undefined && correctnessPass
+}
+
 export function distribution(values: readonly number[]): Distribution | undefined {
   if (values.length === 0) return undefined
   const sorted = values.map((value) => finiteNonNegative(value, 'sample')).sort((a, b) => a - b)

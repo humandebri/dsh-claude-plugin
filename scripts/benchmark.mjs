@@ -30,6 +30,7 @@ import {
 import {
   BENCHMARK_SCHEMA_VERSION,
   analyzeBenchmark,
+  benchmarkTerminalSuccess,
   digestBenchmarkText,
   renderBenchmarkMarkdown,
   validateBenchmarkObservation,
@@ -1203,6 +1204,8 @@ async function runDshSingle(config, scenario, executor, abortController) {
 
 async function runDirectSingle(config, scenario, executor, abortController) {
   let query
+  let execution
+  let runError
   const server = new DirectToolServer(scenario.tools ?? [], executor)
   const started = performance.now()
   let cancellationStarted
@@ -1230,7 +1233,7 @@ async function runDirectSingle(config, scenario, executor, abortController) {
       turn = newStreamState()
     }
     const cancelled = scenario.mode === 'cancel' && abortController.signal.aborted
-    return {
+    execution = {
       output: turn.finalText,
       cancelled,
       cancellationMs: cancellationStarted === undefined ? undefined : elapsed(cancellationStarted),
@@ -1245,10 +1248,24 @@ async function runDirectSingle(config, scenario, executor, abortController) {
       usage: sdkUsage(turn.result),
       result: turn.result,
     }
-  } finally {
-    query?.close()
-    await server.close().catch(() => undefined)
+  } catch (error) {
+    runError = error
   }
+  let closeError
+  try {
+    query?.close()
+  } catch (error) {
+    closeError = error
+  }
+  await server.close().catch(() => undefined)
+  if (runError !== undefined) throw runError
+  if (closeError !== undefined && (scenario.mode !== 'cancel' || !abortController.signal.aborted)) {
+    throw closeError
+  }
+  if (execution === undefined) {
+    throw new BenchmarkFailure('DIRECT_RESULT_MISSING', 'direct benchmark result is missing')
+  }
+  return execution
 }
 
 function mergeStepMetrics(target, source) {
@@ -1581,10 +1598,7 @@ async function runLane(config, scenario, lane, phase, repetition) {
     ? executor.calls.length === 1 && executor.calls[0]?.status === 'aborted'
     : execution.toolStarts === executor.calls.length
   const output = grade.normalized
-  const terminalSuccess =
-    scenario.mode === 'cancel'
-      ? execution.cancelled === true
-      : failureCode === undefined && grade.correctness.pass
+  const terminalSuccess = benchmarkTerminalSuccess(failureCode, grade.correctness.pass)
   let observation = {
     schemaVersion: BENCHMARK_SCHEMA_VERSION,
     runId: config.runId,

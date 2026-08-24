@@ -2,6 +2,7 @@ import { describe, expect, it } from 'vitest'
 import {
   BENCHMARK_SCHEMA_VERSION,
   analyzeBenchmark,
+  benchmarkTerminalSuccess,
   digestBenchmarkText,
   distribution,
   renderBenchmarkMarkdown,
@@ -68,6 +69,12 @@ function paired(count = 5, overrides: Partial<BenchmarkObservation> = {}): Bench
 }
 
 describe('benchmark evidence primitives', () => {
+  it('requires a clean terminal path and passing grader for every successful lane', () => {
+    expect(benchmarkTerminalSuccess(undefined, true)).toBe(true)
+    expect(benchmarkTerminalSuccess('ABORTED', true)).toBe(false)
+    expect(benchmarkTerminalSuccess(undefined, false)).toBe(false)
+  })
+
   it('hashes UTF-8 output without retaining its text', () => {
     const digest = digestBenchmarkText('你好🙂')
     expect(digest).toEqual({
