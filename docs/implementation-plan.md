@@ -390,6 +390,21 @@ The report names measured weaknesses and links each accepted P0/P1 remediation
 to its own issue/PR. Completion waits for every P0 fix to merge and its scenario
 to pass again.
 
+### Implemented contract note
+
+PR 9 compares the direct Agent SDK lane with DSH's LLM runtime plus the plugin;
+the packed real-Web/RPC path remains PR 8's independent product gate. Both
+lanes share the host executable, pinned SDK, model, effort, system prompt,
+workspace, tool schemas, and deterministic tool implementations. Lane order
+alternates, warm-ups are excluded, and five pairs are required for latency
+claims. JSONL retains only verdicts, counts, timing, usage, process evidence,
+and output digests. Prompts, response text, tool payloads/results, provider
+errors, credentials, environment values, and paths are never persisted.
+
+Live execution is fail-closed behind the host-only doctor and a clean exact
+checkout. A missing login creates only a sanitized preflight artifact and an
+incomplete report; it does not create or imply benchmark numbers.
+
 ## Final release-readiness audit
 
 After all planned and benchmark-driven fix PRs merge, verify at exact remote
