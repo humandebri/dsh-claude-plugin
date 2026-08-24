@@ -222,30 +222,42 @@ export class ClaudeOutputTranslator {
           throw protocolError(`Claude stopped unopened content block ${event.index}`)
         }
         this.#open.delete(event.index)
-        let content: ContentBlock
-        if (block.type === 'text') content = { type: 'text', text: block.text }
-        else if (block.type === 'reasoning') content = { type: 'reasoning', text: block.text }
-        else {
-          const rawArguments = block.arguments.length === 0 ? '{}' : block.arguments
-          let parsed: unknown
-          try {
-            parsed = JSON.parse(rawArguments)
-          } catch (error: unknown) {
-            throw protocolError('Claude completed malformed JSON tool arguments', error)
-          }
-          if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
-            throw protocolError('Claude completed non-object tool arguments')
-          }
-          content = {
-            type: 'tool-call',
-            id: asCallId(block.id),
-            name: block.name,
-            arguments: rawArguments,
-          }
-        }
+        const content = this.#materialize(block)
         this.#closed.push(content)
-        return [{ type: 'block-end', index: event.index, block: content }]
+        const chunks: StreamChunk[] = [{ type: 'block-end', index: event.index, block: content }]
+        if (
+          this.#open.size === 0 &&
+          this.#assistantError === undefined &&
+          this.#completed.some((entry) => entry.type === 'tool-call')
+        ) {
+          this.#reconcile()
+          this.#complete = true
+          this.#terminalReason = { kind: 'tool-calls' }
+          chunks.push(finish(this.#terminalReason))
+        }
+        return chunks
       }
+    }
+  }
+
+  #materialize(block: OpenBlock): ContentBlock {
+    if (block.type === 'text') return { type: 'text', text: block.text }
+    if (block.type === 'reasoning') return { type: 'reasoning', text: block.text }
+    const rawArguments = block.arguments.length === 0 ? '{}' : block.arguments
+    let parsed: unknown
+    try {
+      parsed = JSON.parse(rawArguments)
+    } catch (error: unknown) {
+      throw protocolError('Claude completed malformed JSON tool arguments', error)
+    }
+    if (parsed === null || typeof parsed !== 'object' || Array.isArray(parsed)) {
+      throw protocolError('Claude completed non-object tool arguments')
+    }
+    return {
+      type: 'tool-call',
+      id: asCallId(block.id),
+      name: block.name,
+      arguments: rawArguments,
     }
   }
 
@@ -277,8 +289,7 @@ export class ClaudeOutputTranslator {
       this.#assistantError === undefined &&
       this.#completed.some((block) => block.type === 'tool-call')
     ) {
-      if (this.#open.size > 0)
-        throw protocolError('Claude assistant arrived with open content blocks')
+      if (this.#open.size > 0) return []
       this.#reconcile()
       this.#complete = true
       this.#terminalReason = { kind: 'tool-calls' }

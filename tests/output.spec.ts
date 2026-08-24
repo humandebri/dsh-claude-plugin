@@ -212,6 +212,83 @@ describe('Claude output translation', () => {
     ])
   })
 
+  it('accepts current Claude assistant reconciliation before content_block_stop', () => {
+    const translator = new ClaudeOutputTranslator(new UsageTracker())
+    const chunks = acceptAll(translator, [
+      envelope({
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+          type: 'tool_use',
+          id: 'toolu_read_late_stop',
+          name: 'mcp__dsh__read',
+          input: {},
+        },
+      }),
+      envelope({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"path": "/fixture"}' },
+      }),
+      assistant([
+        {
+          type: 'tool_use',
+          id: 'toolu_read_late_stop',
+          name: 'mcp__dsh__read',
+          input: { path: '/fixture' },
+        },
+      ]),
+      envelope({ type: 'content_block_stop', index: 0 }),
+    ])
+    expect(chunks.at(-2)).toEqual({
+      type: 'block-end',
+      index: 0,
+      block: {
+        type: 'tool-call',
+        id: 'toolu_read_late_stop',
+        name: 'read',
+        arguments: '{"path": "/fixture"}',
+      },
+    })
+    expect(chunks.at(-1)).toEqual({ type: 'finish', reason: { kind: 'tool-calls' } })
+  })
+
+  it('rejects a late tool stop when the assistant content does not reconcile', () => {
+    const translator = new ClaudeOutputTranslator(new UsageTracker())
+    translator.accept(
+      envelope({
+        type: 'content_block_start',
+        index: 0,
+        content_block: {
+          type: 'tool_use',
+          id: 'toolu_bad_late_stop',
+          name: 'mcp__dsh__read',
+          input: {},
+        },
+      }),
+    )
+    translator.accept(
+      envelope({
+        type: 'content_block_delta',
+        index: 0,
+        delta: { type: 'input_json_delta', partial_json: '{"path":"/partial"}' },
+      }),
+    )
+    translator.accept(
+      assistant([
+        {
+          type: 'tool_use',
+          id: 'toolu_bad_late_stop',
+          name: 'mcp__dsh__read',
+          input: { path: '/completed' },
+        },
+      ]),
+    )
+    expect(() => translator.accept(envelope({ type: 'content_block_stop', index: 0 }))).toThrow(
+      /did not reconcile/,
+    )
+  })
+
   it('accepts complete and empty tool arguments while rejecting malformed tool JSON', () => {
     const complete = new ClaudeOutputTranslator(new UsageTracker())
     const chunks = acceptAll(complete, [
