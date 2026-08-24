@@ -786,7 +786,7 @@ try {
     await scenario('live.text', async () => {
       const before = await history(server.baseUrl, sessionId)
       const beforeSummary = summarizeHistory(before)
-      const browserRows = browserState?.page.locator('[data-chat-flow-kind="assistant"]')
+      const browserRows = browserState?.page.locator('[data-chat-flow-kind="assistant-step"]')
       const beforeBrowserRows = await browserRows?.count()
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId,
