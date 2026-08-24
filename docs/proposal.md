@@ -312,6 +312,12 @@ step, replay state records a version, Claude session identifier, safe transcript
 or fork identifier when available, consumed DSH-prefix fingerprint, model, and
 cumulative usage snapshot.
 
+One admitted DSH step can contain several non-tool user messages, including
+context injected after the human prompt. The adapter preserves their content
+order but coalesces them into one querying SDK user frame. It never uses an
+intermediate `shouldQuery: false` frame that current Claude may close with a
+zero-turn result before the actual query frame is observed.
+
 An exact cold resume is allowed only when the current projected prefix matches
 the replay fingerprint. A DSH fork may use Claude's supported fork/session
 resume only when the exact stored transcript identifier is safe for that prefix.

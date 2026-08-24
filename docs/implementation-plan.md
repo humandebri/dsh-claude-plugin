@@ -313,6 +313,22 @@ Branch: `michi/dsh-web-e2e`
 The exact plugin head works in the actual DSH WebUI—not only a unit harness or
 stale local listener.
 
+### Implemented contract note
+
+PR 8 provisions published DSH `0.1.1-rc.2`, packs the exact plugin checkout,
+installs it into an isolated Web profile, verifies protected profile rows, and
+binds only an OS-assigned loopback port. The deterministic lane drives the real
+WebUI with DSH's browser-based directory picker pinned as a test-only overlay;
+it asserts the three-column frame, Claude menu/default/reasoning catalog,
+keyless onboarding, public RPC error boundary, clean browser runtime, and
+listener/descendant teardown. CI uploads a sanitized JSON report and screenshot.
+
+The authenticated lane is fail-closed behind installed-profile doctor and adds
+exact text, same-session memory, correlated bash tool execution, active-turn
+cancellation, cold restart, durable history, and post-restart continuity. Its
+reports contain counts and stable categories only—never prompts, nonces, tool
+payloads, logs, credentials, environment values, or temporary paths.
+
 ## PR 9 — Direct-Claude parity benchmark and weakness report
 
 Branch: `michi/benchmarks`

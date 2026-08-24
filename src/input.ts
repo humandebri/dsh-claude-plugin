@@ -167,14 +167,9 @@ export class LiveInputCursor {
       return { kind: 'tool-results', results: pending.map(toolResult) }
     }
     this.encoder.assertMessages(pending)
-    const sdkMessages = await Promise.all(
-      pending.map((message) => this.encoder.userMessage(message, options.signal)),
-    )
-    for (const message of sdkMessages.slice(0, -1)) message.shouldQuery = false
-    sdkMessages.at(-1)!.shouldQuery = true
     return {
       kind: 'prompt',
-      messages: sdkMessages,
+      messages: [await this.encoder.userMessages(pending, options.signal)],
       ...(start === undefined ? {} : { start }),
     }
   }
