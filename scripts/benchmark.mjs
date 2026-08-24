@@ -31,6 +31,7 @@ import {
   BENCHMARK_SCHEMA_VERSION,
   analyzeBenchmark,
   benchmarkTerminalSuccess,
+  benchmarkTranscriptInvariant,
   digestBenchmarkText,
   renderBenchmarkMarkdown,
   validateBenchmarkObservation,
@@ -1133,6 +1134,7 @@ async function runDshSingle(config, scenario, executor, abortController) {
   let output = ''
   let finish
   let cancelled = false
+  let cancellationMs
   const started = performance.now()
   try {
     for (let iteration = 0; iteration < MAX_ITERATIONS; iteration += 1) {
@@ -1156,10 +1158,11 @@ async function runDshSingle(config, scenario, executor, abortController) {
         messages.push(dshAssistantMessage(step))
         if (scenario.mode === 'cancel') {
           const toolController = new AbortController()
-          const timer = setTimeout(
-            () => toolController.abort(new Error('benchmark cancellation')),
-            scenario.abortAfterMs,
-          )
+          const cancellationStarted = performance.now()
+          const timer = setTimeout(() => {
+            cancellationMs = elapsed(cancellationStarted)
+            toolController.abort(new Error('benchmark cancellation'))
+          }, scenario.abortAfterMs)
           try {
             await executeDshToolBoundary(step, executor, toolController.signal)
           } finally {
@@ -1192,6 +1195,7 @@ async function runDshSingle(config, scenario, executor, abortController) {
     return {
       output,
       cancelled,
+      cancellationMs,
       durationMs: elapsed(started),
       ...aggregate,
       finish,
@@ -1209,14 +1213,20 @@ async function runDirectSingle(config, scenario, executor, abortController) {
   const server = new DirectToolServer(scenario.tools ?? [], executor)
   const started = performance.now()
   let cancellationStarted
+  let cancellationMs
   if (scenario.mode === 'cancel') {
     executor.onCallStart = () => {
       if (cancellationStarted !== undefined) return
       cancellationStarted = performance.now()
-      setTimeout(
-        () => abortController.abort(new Error('benchmark cancellation')),
-        scenario.abortAfterMs,
-      ).unref()
+      setTimeout(() => {
+        cancellationMs = elapsed(cancellationStarted)
+        abortController.abort(new Error('benchmark cancellation'))
+        try {
+          query?.close()
+        } catch {
+          // The abort signal already owns cancellation; close only forces prompt teardown.
+        }
+      }, scenario.abortAfterMs).unref()
     }
   }
   try {
@@ -1236,7 +1246,7 @@ async function runDirectSingle(config, scenario, executor, abortController) {
     execution = {
       output: turn.finalText,
       cancelled,
-      cancellationMs: cancellationStarted === undefined ? undefined : elapsed(cancellationStarted),
+      cancellationMs,
       durationMs: elapsed(started),
       firstTokenMs: turn.firstTokenMs,
       firstToolRequestMs: turn.firstToolRequestMs,
@@ -1644,7 +1654,10 @@ async function runLane(config, scenario, lane, phase, repetition) {
       toolCorrelation:
         callIdsValid && callsSettled && expectedCalls && execution.missingBlockCount === 0,
       policy: !executor.policyViolation && checkWorld(config.workspace, scenario.worldChecks),
-      transcript: grade.correctness.pass,
+      transcript: benchmarkTranscriptInvariant(
+        execution.duplicateBlockCount,
+        execution.missingBlockCount,
+      ),
       redaction: true,
     },
     ...(failureCode === undefined ? {} : { failureCode }),

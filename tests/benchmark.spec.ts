@@ -3,6 +3,7 @@ import {
   BENCHMARK_SCHEMA_VERSION,
   analyzeBenchmark,
   benchmarkTerminalSuccess,
+  benchmarkTranscriptInvariant,
   digestBenchmarkText,
   distribution,
   renderBenchmarkMarkdown,
@@ -73,6 +74,13 @@ describe('benchmark evidence primitives', () => {
     expect(benchmarkTerminalSuccess(undefined, true)).toBe(true)
     expect(benchmarkTerminalSuccess('ABORTED', true)).toBe(false)
     expect(benchmarkTerminalSuccess(undefined, false)).toBe(false)
+  })
+
+  it('treats transcript integrity as structural evidence rather than task correctness', () => {
+    expect(benchmarkTranscriptInvariant(0, 0)).toBe(true)
+    expect(benchmarkTranscriptInvariant(1, 0)).toBe(false)
+    expect(benchmarkTranscriptInvariant(0, 1)).toBe(false)
+    expect(() => benchmarkTranscriptInvariant(-1, 0)).toThrow(/duplicateBlockCount/)
   })
 
   it('hashes UTF-8 output without retaining its text', () => {

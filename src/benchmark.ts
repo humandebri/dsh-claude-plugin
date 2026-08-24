@@ -188,6 +188,15 @@ export function benchmarkTerminalSuccess(
   return failureCode === undefined && correctnessPass
 }
 
+export function benchmarkTranscriptInvariant(
+  duplicateBlockCount: number,
+  missingBlockCount: number,
+): boolean {
+  safeCount(duplicateBlockCount, 'duplicateBlockCount')
+  safeCount(missingBlockCount, 'missingBlockCount')
+  return duplicateBlockCount === 0 && missingBlockCount === 0
+}
+
 export function distribution(values: readonly number[]): Distribution | undefined {
   if (values.length === 0) return undefined
   const sorted = values.map((value) => finiteNonNegative(value, 'sample')).sort((a, b) => a - b)
