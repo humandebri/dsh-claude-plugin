@@ -191,6 +191,24 @@ export class ClaudeContentEncoder {
     }
   }
 
+  /** Coalesce one admitted DSH step into the SDK's single querying user frame. */
+  async userMessages(messages: readonly Message[], signal?: AbortSignal): Promise<SDKUserMessage> {
+    const content: SdkUserContentBlock[] = []
+    for (const message of messages) {
+      const encoded = await this.userMessage(message, signal)
+      const blocks = encoded.message.content
+      if (typeof blocks === 'string') content.push({ type: 'text', text: blocks })
+      else content.push(...blocks)
+    }
+    if (content.length === 0) throw unsupportedInput('Claude request has no user content')
+    return {
+      type: 'user',
+      message: { role: 'user', content },
+      parent_tool_use_id: null,
+      shouldQuery: true,
+    }
+  }
+
   async degradedMessage(
     messages: readonly Message[],
     transcript: string,
