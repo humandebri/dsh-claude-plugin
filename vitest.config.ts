@@ -8,6 +8,8 @@ export default defineConfig({
       provider: 'v8',
       reporter: ['text', 'json-summary'],
       include: ['src/**/*.ts'],
+      // Real CLI/SDK/process behavior is exercised by the packed DSH profile E2E.
+      exclude: ['src/doctor-runtime.ts'],
       thresholds: {
         branches: 90,
         functions: 90,

@@ -271,6 +271,22 @@ Branch: `michi/doctor-install`
 A user can diagnose prerequisites, install, select Claude, and remove the plugin
 without editing DSH source or weakening policy.
 
+### Implemented contract note
+
+PR 7 exposes a stable versioned JSON doctor report and text CLI. Host metadata
+probes are separately bounded, while SDK initialization uses the same isolated
+MCP-only authority as production. `--no-live` is keyless and intentionally
+reports skipped generation; only `--live` proves authentication. Reports retain
+versions, statuses, durations, counts, and stable failure categories—not
+prompts, tool payloads, environment values, stderr, or raw provider errors.
+
+The profile verifier parses boot-free YAML semantically. Installation may only
+append the exact `llm-claude-code` bundle row and replace the existing default
+model row's config with `claude-code/default`; every other row and row order is
+protected. Optional removal must reproduce the complete baseline tree. The
+packed-tarball E2E runs add, installed-profile doctor, remove, and restoration
+inside a temporary `DSH_HOME` pinned to DSH `0.1.1-rc.2`.
+
 ## PR 8 — Current DSH WebUI end-to-end suite
 
 Branch: `michi/dsh-web-e2e`

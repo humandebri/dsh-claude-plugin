@@ -5,6 +5,9 @@
   "license": "MIT",
   "author": "snowan",
   "type": "module",
+  "bin": {
+    "dsh-claude-plugin": "./lib/cli.js"
+  },
   "main": "./lib/index.js",
   "types": "./lib/index.d.ts",
   "exports": {
@@ -56,6 +59,7 @@
     "publint": "node scripts/run-publint.mjs",
     "smoke:claude": "npm run build && node scripts/smoke-claude.mjs",
     "test": "vitest run",
+    "test:profile": "npm run build && node scripts/profile-install-e2e.mjs",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
@@ -68,7 +72,8 @@
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.241",
     "@deepseek-ai/schemastery": "^3.18.1",
-    "@modelcontextprotocol/sdk": "1.30.0"
+    "@modelcontextprotocol/sdk": "1.30.0",
+    "yaml": "2.9.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "4.0.1",
@@ -81,10 +86,10 @@
     "@types/node": "^22.20.0",
     "@vitest/coverage-v8": "^4.1.8",
     "oxlint": "1.76.0",
+    "pnpm": "10.34.5",
     "prettier": "3.9.6",
     "publint": "0.3.24",
     "typescript": "^6.0.3",
-    "vitest": "^4.1.8",
-    "yaml": "2.9.0"
+    "vitest": "^4.1.8"
   }
 }
