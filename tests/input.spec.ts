@@ -21,15 +21,18 @@ function options(messages: Message[], extra: Partial<GenerateOptions> = {}): Gen
 }
 
 describe('live SDK input cursor', () => {
-  it('submits multiple user frames with only the final frame triggering a query', async () => {
+  it('coalesces same-step DSH messages into one querying SDK frame', async () => {
     const cursor = new LiveInputCursor()
     const prepared = await cursor.prepare(
       options([message('a', 'user', 'context'), message('b', 'user', 'go')]),
     )
-    expect(prepared.map((entry) => entry.shouldQuery)).toEqual([false, true])
+    expect(prepared.map((entry) => entry.shouldQuery)).toEqual([true])
     expect(prepared[0]?.message).toEqual({
       role: 'user',
-      content: [{ type: 'text', text: 'context' }],
+      content: [
+        { type: 'text', text: 'context' },
+        { type: 'text', text: 'go' },
+      ],
     })
   })
 
