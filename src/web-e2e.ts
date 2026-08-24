@@ -23,6 +23,7 @@ export interface HistoryEvidence {
   readonly maxSeq: number
   readonly eventTypes: readonly string[]
   readonly assistantMessageCount: number
+  readonly assistantTextCharacters: number
   readonly toolCalls: readonly string[]
   readonly toolResultCount: number
   readonly turnEndKinds: readonly string[]
@@ -166,16 +167,21 @@ function messageContent(data: JsonRecord): unknown {
   return data.content
 }
 
-/** Read only marker text from assistant messages; tool payloads remain opaque. */
-export function historyHasAssistantMarker(value: unknown, marker: string): boolean {
+/** Count marker-bearing assistant messages without reading tool payloads. */
+export function historyAssistantMarkerCount(value: unknown, marker: string): number {
   const history = requiredRecord(value, 'session.history value')
-  return requiredArray(history.events, 'session.history events').some((entry) => {
+  return requiredArray(history.events, 'session.history events').filter((entry) => {
     const event = requiredRecord(requiredRecord(entry, 'history entry').event, 'history event')
     if (event.type !== 'assistant/message') return false
     return contentText(
       messageContent(requiredRecord(event.data, 'assistant message data')),
     ).includes(marker)
-  })
+  }).length
+}
+
+/** Read only marker text from assistant messages; tool payloads remain opaque. */
+export function historyHasAssistantMarker(value: unknown, marker: string): boolean {
+  return historyAssistantMarkerCount(value, marker) > 0
 }
 
 /** Read marker text only from the correlated tool-result message content. */
@@ -215,11 +221,17 @@ export function summarizeHistory(value: unknown): HistoryEvidence {
     }
     return typeof event.data.reason.kind === 'string' ? [event.data.reason.kind] : []
   })
+  const assistantTextCharacters = events.reduce((total, event) => {
+    if (event.type !== 'assistant/message') return total
+    const data = requiredRecord(event.data, 'assistant message data')
+    return total + contentText(messageContent(data)).length
+  }, 0)
   return Object.freeze({
     eventCount: events.length,
     maxSeq: sequences.length === 0 ? -1 : Math.max(...sequences),
     eventTypes: Object.freeze(eventTypes),
     assistantMessageCount: events.filter((event) => event.type === 'assistant/message').length,
+    assistantTextCharacters,
     toolCalls: Object.freeze(toolCalls),
     toolResultCount: events.filter((event) => event.type === 'tool/result').length,
     turnEndKinds: Object.freeze(turnEndKinds),

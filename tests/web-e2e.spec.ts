@@ -2,6 +2,7 @@ import { describe, expect, it, vi } from 'vitest'
 import {
   DshRpcError,
   dshRpc,
+  historyAssistantMarkerCount,
   historyHasAssistantMarker,
   historyHasToolResultMarker,
   inspectClaudeCatalog,
@@ -177,6 +178,8 @@ describe('DSH Web E2E contract helpers', () => {
   })
 
   it('extracts marker predicates and payload-free history evidence', () => {
+    expect(historyAssistantMarkerCount(history, 'DSH_WEB_TEXT_OK')).toBe(1)
+    expect(historyAssistantMarkerCount(history, 'secret')).toBe(0)
     expect(historyHasAssistantMarker(history, 'DSH_WEB_TEXT_OK')).toBe(true)
     expect(historyHasAssistantMarker(history, 'secret')).toBe(false)
     expect(historyHasToolResultMarker(history, 'DSH_WEB_TOOL_OK')).toBe(true)
@@ -185,6 +188,7 @@ describe('DSH Web E2E contract helpers', () => {
       maxSeq: 4,
       eventTypes: ['assistant/message', 'tool/call', 'tool/result', 'turn/end'],
       assistantMessageCount: 1,
+      assistantTextCharacters: 15,
       toolCalls: ['bash'],
       toolResultCount: 1,
       turnEndKinds: ['completed'],

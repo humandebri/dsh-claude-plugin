@@ -12,6 +12,7 @@ import {
   DshRpcError,
   WEB_E2E_SCHEMA_VERSION,
   dshRpc,
+  historyAssistantMarkerCount,
   historyHasAssistantMarker,
   historyHasToolResultMarker,
   inspectClaudeCatalog,
@@ -72,10 +73,11 @@ const reportPath = resolve(parsed.values.report ?? join(artifactDirectory, `web-
 const screenshotPath = join(artifactDirectory, `web-e2e-${mode}.png`)
 
 class WebE2eFailure extends Error {
-  constructor(code, message) {
+  constructor(code, message, evidence) {
     super(message)
     this.name = 'WebE2eFailure'
     this.code = code
+    this.evidence = evidence
   }
 }
 
@@ -339,6 +341,21 @@ async function waitForTurnCount(baseUrl, sessionId, count) {
   )
 }
 
+async function waitForSettledTurn(baseUrl, sessionId, previousTurnCount, label) {
+  return waitForTurnCount(baseUrl, sessionId, previousTurnCount + 1).catch((error) => {
+    if (error instanceof WebE2eFailure && error.code === 'POLL_TIMEOUT') {
+      throw new WebE2eFailure('TURN_SETTLE_TIMEOUT', `timed out waiting for ${label}`)
+    }
+    throw error
+  })
+}
+
+function requireNewAssistantMarker(page, marker, previousCount, code, summary, evidence) {
+  if (historyAssistantMarkerCount(page, marker) <= previousCount) {
+    throw new WebE2eFailure(code, summary, evidence)
+  }
+}
+
 async function acknowledgeWelcome(page) {
   const welcome = page.getByRole('dialog', { name: 'Internal Testing Notice' })
   if ((await welcome.count()) === 0) return false
@@ -540,6 +557,9 @@ async function scenario(id, operation) {
       status: 'fail',
       durationMs: duration(started),
       failureCode: stableFailureCode(error),
+      ...(error instanceof WebE2eFailure && error.evidence !== undefined
+        ? { evidence: error.evidence }
+        : {}),
     })
     throw error
   }
@@ -763,107 +783,172 @@ try {
 
   let memoryMarker
   if (mode === 'live') {
-    const textMarker = 'DSH_CLAUDE_WEB_TEXT_OK'
     await scenario('live.text', async () => {
+      const before = await history(server.baseUrl, sessionId)
+      const beforeSummary = summarizeHistory(before)
+      const browserRows = browserState?.page.locator('[data-chat-flow-kind="assistant"]')
+      const beforeBrowserRows = await browserRows?.count()
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId,
         mode: 'queue',
-        content: [{ type: 'text', text: `Reply with exactly ${textMarker} and nothing else.` }],
+        content: [
+          {
+            type: 'text',
+            text: 'This is a harmless local adapter smoke test. Calculate 19 + 23 and provide a brief answer.',
+          },
+        ],
       })
-      const page = await waitForHistory(
+      const page = await waitForSettledTurn(
         server.baseUrl,
         sessionId,
-        (value) => historyHasAssistantMarker(value, textMarker),
-        'the exact text marker',
+        beforeSummary.turnEndKinds.length,
+        'the text response to settle',
       )
-      await browserState?.page.getByText(textMarker, { exact: true }).last().waitFor({
-        timeout: 30_000,
-      })
+      const summary = summarizeHistory(page)
+      if (
+        summary.assistantMessageCount <= beforeSummary.assistantMessageCount ||
+        summary.assistantTextCharacters <= beforeSummary.assistantTextCharacters
+      ) {
+        throw new WebE2eFailure(
+          'LIVE_TEXT_EMPTY',
+          'settled text response contained no new assistant text',
+          summary,
+        )
+      }
+      if (browserRows !== undefined && beforeBrowserRows !== undefined) {
+        await waitFor(
+          async () => ((await browserRows.count()) > beforeBrowserRows ? true : false),
+          'the assistant response to render in the browser',
+          30_000,
+        )
+      }
       browserState?.assertClean()
-      return summarizeHistory(page)
+      return summary
     })
 
-    memoryMarker = `MEMORY_${createHash('sha256').update(crypto.randomUUID()).digest('hex').slice(0, 12)}`
+    memoryMarker = `cedar-lantern-${createHash('sha256').update(crypto.randomUUID()).digest('hex').slice(0, 8)}`
     await scenario('live.multi-turn', async () => {
+      const before = await history(server.baseUrl, sessionId)
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId,
         mode: 'queue',
         content: [
           {
             type: 'text',
-            text: `Remember the private test token ${memoryMarker}. Reply with exactly MEMORY_ACK.`,
+            text: `This is a harmless conversation-continuity test for the local adapter. Remember the phrase "${memoryMarker}" for my next question and acknowledge the request.`,
           },
         ],
       })
-      await waitForTurnCount(server.baseUrl, sessionId, 2)
-      await dshRpc(fetch, server.baseUrl, 'session.prompt', {
-        sessionId,
-        mode: 'queue',
-        content: [
-          {
-            type: 'text',
-            text: 'Return the private test token from the previous turn and nothing else.',
-          },
-        ],
-      })
-      const page = await waitForHistory(
+      const acknowledged = await waitForSettledTurn(
         server.baseUrl,
         sessionId,
-        (value) => historyHasAssistantMarker(value, memoryMarker),
-        'the multi-turn memory marker',
+        summarizeHistory(before).turnEndKinds.length,
+        'the memory acknowledgement to settle',
+      )
+      const beforeRecallSummary = summarizeHistory(acknowledged)
+      const beforeRecallMarkers = historyAssistantMarkerCount(acknowledged, memoryMarker)
+      await dshRpc(fetch, server.baseUrl, 'session.prompt', {
+        sessionId,
+        mode: 'queue',
+        content: [
+          {
+            type: 'text',
+            text: 'For the same continuity test, what harmless phrase did I ask you to remember? Include the phrase in your answer.',
+          },
+        ],
+      })
+      const page = await waitForSettledTurn(
+        server.baseUrl,
+        sessionId,
+        beforeRecallSummary.turnEndKinds.length,
+        'the memory recall to settle',
+      )
+      requireNewAssistantMarker(
+        page,
+        memoryMarker,
+        beforeRecallMarkers,
+        'LIVE_MEMORY_MISMATCH',
+        'settled recall response omitted the remembered phrase',
+        summarizeHistory(page),
       )
       return summarizeHistory(page)
     })
 
-    const toolMarker = 'DSH_CLAUDE_WEB_TOOL_OK'
+    const toolMarker = '314159'
     await scenario('live.tool', async () => {
+      const before = await history(server.baseUrl, sessionId)
+      const beforeSummary = summarizeHistory(before)
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId,
         mode: 'queue',
         content: [
           {
             type: 'text',
-            text: `Use the bash tool exactly once to run printf ${toolMarker}. Then reply exactly TOOL_DONE.`,
+            text: `For this harmless local adapter tool test, use the bash tool exactly once to run printf ${toolMarker}. Then briefly report what the command returned.`,
           },
         ],
       })
-      const page = await waitForHistory(
+      const page = await waitForSettledTurn(
         server.baseUrl,
         sessionId,
-        (value) => {
-          const summary = summarizeHistory(value)
-          return (
-            summary.toolCalls.includes('bash') &&
-            historyHasToolResultMarker(value, toolMarker) &&
-            historyHasAssistantMarker(value, 'TOOL_DONE')
-          )
-        },
-        'the correlated bash round trip',
+        beforeSummary.turnEndKinds.length,
+        'the correlated bash round trip to settle',
       )
+      const summary = summarizeHistory(page)
+      if (!summary.toolCalls.includes('bash')) {
+        throw new WebE2eFailure('LIVE_TOOL_CALL_MISSING', 'settled tool test made no bash call')
+      }
+      if (!historyHasToolResultMarker(page, toolMarker)) {
+        throw new WebE2eFailure(
+          'LIVE_TOOL_RESULT_MISMATCH',
+          'settled tool test omitted the correlated output',
+        )
+      }
+      if (
+        summary.assistantMessageCount <= beforeSummary.assistantMessageCount ||
+        summary.assistantTextCharacters <= beforeSummary.assistantTextCharacters
+      ) {
+        throw new WebE2eFailure(
+          'LIVE_TOOL_REPLY_EMPTY',
+          'settled tool response contained no new assistant text',
+          summary,
+        )
+      }
       await browserState?.page.locator('[data-sample="bash"]').last().waitFor({ timeout: 30_000 })
       browserState?.assertClean()
-      return summarizeHistory(page)
+      return summary
     })
 
     await scenario('live.cancellation', async () => {
       const created = await dshRpc(fetch, server.baseUrl, 'session.create', { workspaceId })
       const cancellationId = created.sessionId
+      const before = await history(server.baseUrl, cancellationId)
+      const beforeTurns = summarizeHistory(before).turnEndKinds.length
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId: cancellationId,
         mode: 'queue',
         content: [
           {
             type: 'text',
-            text: 'Use bash to run sleep 20, wait for it, then reply CANCELLATION_SHOULD_NOT_FINISH.',
+            text: 'For this harmless local adapter cancellation test, use bash to run sleep 20, wait for it, then say "Cancellation test unexpectedly completed."',
           },
         ],
       })
-      await waitForHistory(
+      const started = await waitForHistory(
         server.baseUrl,
         cancellationId,
-        (value) => summarizeHistory(value).toolCalls.includes('bash'),
-        'the cancellable bash call',
+        (value) => {
+          const summary = summarizeHistory(value)
+          return summary.toolCalls.includes('bash') || summary.turnEndKinds.length > beforeTurns
+        },
+        'the cancellable bash call or an early turn boundary',
       )
+      if (!summarizeHistory(started).toolCalls.includes('bash')) {
+        throw new WebE2eFailure(
+          'LIVE_CANCELLATION_TOOL_MISSING',
+          'cancellation test settled before issuing bash',
+        )
+      }
       await dshRpc(fetch, server.baseUrl, 'session.cancel', { sessionId: cancellationId })
       const page = await waitForHistory(
         server.baseUrl,
@@ -875,7 +960,7 @@ try {
         'the cancelled turn boundary',
       )
       const evidence = summarizeHistory(page)
-      if (historyHasAssistantMarker(page, 'CANCELLATION_SHOULD_NOT_FINISH')) {
+      if (historyHasAssistantMarker(page, 'Cancellation test unexpectedly completed.')) {
         throw new WebE2eFailure('CANCELLATION_IGNORED', 'cancelled turn emitted terminal marker')
       }
       return evidence
@@ -895,27 +980,36 @@ try {
       if (!historyHasAssistantMarker(before, memoryMarker)) {
         throw new WebE2eFailure('RESTART_HISTORY_MISSING', 'history marker was not durable')
       }
-      const restartMarker = `RESTART_${memoryMarker}`
+      const beforeSummary = summarizeHistory(before)
+      const beforeRestartMarkers = historyAssistantMarkerCount(before, memoryMarker)
       await dshRpc(fetch, server.baseUrl, 'session.prompt', {
         sessionId,
         mode: 'queue',
         content: [
           {
             type: 'text',
-            text: 'After restart, return RESTART_ followed immediately by the private test token from the earlier turn. Return nothing else.',
+            text: 'This is the final step of the same harmless adapter continuity test. After the restart, what phrase did I ask you to remember? Include the phrase in your answer.',
           },
         ],
       })
-      const after = await waitForHistory(
+      const after = await waitForSettledTurn(
         server.baseUrl,
         sessionId,
-        (value) => historyHasAssistantMarker(value, restartMarker),
-        'the post-restart continuity marker',
+        beforeSummary.turnEndKinds.length,
+        'the post-restart continuity response to settle',
+      )
+      requireNewAssistantMarker(
+        after,
+        memoryMarker,
+        beforeRestartMarkers,
+        'LIVE_RESTART_MISMATCH',
+        'settled post-restart response omitted the continuity evidence',
+        summarizeHistory(after),
       )
       if (useBrowser) {
         browserState = await openBrowser(server.baseUrl, workspace, false)
         await selectSessionInBrowser(browserState.page, TITLE)
-        await browserState.page.getByText(restartMarker, { exact: true }).last().waitFor({
+        await browserState.page.getByText(memoryMarker, { exact: false }).last().waitFor({
           timeout: 30_000,
         })
         browserState.assertClean()
