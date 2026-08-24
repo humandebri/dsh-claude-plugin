@@ -1,5 +1,5 @@
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ContentBlock, GenerateOptions, Message } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
 import { CLAUDE_ERROR_CODES, claudeError, unsupportedInput } from './errors.js'
 import { PROVIDER_ID } from './models.js'
 
@@ -43,15 +43,35 @@ export interface CommittedAssistant {
   readonly content: readonly ContentBlock[]
 }
 
+export type LiveInputPlan =
+  | { readonly kind: 'prompt'; readonly messages: SDKUserMessage[] }
+  | { readonly kind: 'tool-results'; readonly results: ToolResultBlock[] }
+
+function toolResult(message: Message): ToolResultBlock {
+  if (
+    message.role !== 'user' ||
+    message.source.kind !== 'tool' ||
+    message.content.length !== 1 ||
+    message.content[0]?.type !== 'tool-result'
+  ) {
+    throw unsupportedInput('a Claude tool boundary accepts only DSH tool-result messages')
+  }
+  const result = message.content[0]
+  if (
+    String(result.toolCallId) !== String(message.source.callId) ||
+    result.content.some((block) => block.type !== 'text')
+  ) {
+    throw unsupportedInput('DSH tool-result message correlation or content is unsupported')
+  }
+  return result
+}
+
 /** Tracks the exact DSH prefix already represented by a live SDK query. */
 export class LiveInputCursor {
   #prefix: readonly Message[] = []
   #assistant: CommittedAssistant | undefined
 
-  prepare(options: GenerateOptions): SDKUserMessage[] {
-    if ((options.tools?.length ?? 0) > 0) {
-      throw unsupportedInput('DSH tools are not enabled until the tool-bridge milestone')
-    }
+  prepareStep(options: GenerateOptions): LiveInputPlan {
     if (options.temperature !== undefined) {
       throw unsupportedInput('Claude Code does not expose DSH temperature control')
     }
@@ -108,10 +128,21 @@ export class LiveInputCursor {
 
     const pending = options.messages.slice(offset)
     if (pending.length === 0) throw unsupportedInput('Claude generation requires new user content')
+    if (this.#assistant?.content.some((block) => block.type === 'tool-call') === true) {
+      return { kind: 'tool-results', results: pending.map(toolResult) }
+    }
     const sdkMessages = pending.map(userMessage)
     for (const message of sdkMessages.slice(0, -1)) message.shouldQuery = false
     sdkMessages.at(-1)!.shouldQuery = true
-    return sdkMessages
+    return { kind: 'prompt', messages: sdkMessages }
+  }
+
+  prepare(options: GenerateOptions): SDKUserMessage[] {
+    const plan = this.prepareStep(options)
+    if (plan.kind !== 'prompt') {
+      throw unsupportedInput('tool results must resume the live Claude MCP call')
+    }
+    return plan.messages
   }
 
   commit(messages: readonly Message[], assistant: CommittedAssistant): void {

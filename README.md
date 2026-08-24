@@ -11,15 +11,20 @@ Developed by [snowan](https://github.com/snowan) with Codex assistance.
 
 ## Status
 
-The package registers the `claude-code` provider and runs text-only Claude turns
-through the pinned Claude Agent SDK and DSH's managed subprocess service. It
-streams text, thinking, per-turn usage, and one terminal result while retaining
-one serialized SDK query per live DSH session.
+The package registers the `claude-code` provider and runs Claude turns through
+the pinned Claude Agent SDK and DSH's managed subprocess service. It streams
+text, thinking, raw tool calls, per-turn usage, and one terminal result while
+retaining one serialized SDK query per live DSH session.
 
-This is the transport milestone, not the completed plugin. DSH tools, images,
-cold replay, idle eviction, doctor/install automation, and WebUI E2E arrive in
-later pull requests. A request containing tools or unsupported history fails
-closed with a stable diagnostic rather than silently bypassing DSH.
+DSH tools are exposed through one in-process MCP server. Claude's native tools,
+ambient MCP servers, settings, hooks, plugins, and main-session skills remain
+disabled. Each MCP handler pauses until DSH executes the visible tool call and
+returns the exact correlated result; the same Claude query then resumes.
+
+This is the tool-bridge milestone, not the completed plugin. Text tool results
+are supported. Images, cold replay, idle eviction, doctor/install automation,
+and WebUI E2E arrive in later pull requests. Unsupported content or history
+fails closed with a stable diagnostic rather than silently bypassing DSH.
 
 ## Requirements
 
@@ -64,9 +69,24 @@ row. Later user/profile patches retain precedence. To remove it:
 dsh plugin --profile web remove dsh-claude-plugin
 ```
 
-The current text-only route is suitable for transport testing. Standard DSH
-coding sessions expose tools, so seamless Standard/WebUI use remains gated on
-the next tool-bridge milestone.
+The current route supports Standard-style text and DSH tool turns. Treat it as
+pre-release until the authenticated tool E2E and later lifecycle/WebUI gates in
+the implementation plan pass.
+
+## Tool authority and correlation
+
+Only tool names under `mcp__dsh__*` are allowed inside Claude Code. Tool schemas
+are copied into the MCP catalog as raw JSON Schema, including nested, union,
+enum, and constrained forms. Catalog changes are allowed only between settled
+generations.
+
+The bridge requires Claude Code to attach its provider tool-use ID as
+`claudecode/toolUseId`. Before DSH receives a tool boundary, the bridge matches
+that ID with the streamed call ID, DSH tool name, canonical arguments, and
+catalog generation. Missing, duplicate, stale, timed-out, or mismatched data
+closes the session with `CLAUDE_TOOL_PROTOCOL_ERROR` or
+`CLAUDE_TOOL_TIMEOUT`; it never guesses by name or call order. This metadata is
+a pinned Claude Code compatibility seam and must be reverified during upgrades.
 
 ## Configuration
 
@@ -76,7 +96,7 @@ the next tool-bridge milestone.
 | `executablePolicy`       | `host-only` | Host/bundled executable selection            |
 | `defaultModel`           | `sonnet`    | Target of the `default` model alias          |
 | `sessionIdleMs`          | 15 minutes  | Reserved for the session-lifecycle milestone |
-| `toolRoundTripTimeoutMs` | 30 minutes  | Future DSH tool pause bound                  |
+| `toolRoundTripTimeoutMs` | 30 minutes  | Maximum pause awaiting a DSH tool result     |
 | `shutdownGraceMs`        | 5 seconds   | Managed process shutdown grace               |
 | `passEnv`                | `[]`        | Explicit non-sensitive environment names     |
 | `debug`                  | `false`     | Safe transport diagnostics                   |
@@ -85,9 +105,9 @@ The child receives SDK protocol facts, non-secret OS home/identity variables
 needed for Claude Code to locate its own authenticated profile, and explicitly
 approved `passEnv` names. Sensitive names and all `DSH_*` environment entries
 are rejected. Claude native tools, filesystem settings, SDK hooks, plugins,
-main-session skills, and ambient MCP servers are disabled; DSH remains the
-intended execution authority. Claude Code still enforces any enterprise-managed
-policy installed by an administrator.
+main-session skills, and ambient MCP servers are disabled; only the in-process
+DSH MCP server is configured. DSH remains the execution authority. Claude Code
+still enforces any enterprise-managed policy installed by an administrator.
 
 ## Design documents
 

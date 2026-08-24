@@ -11,6 +11,8 @@ export const CLAUDE_ERROR_CODES = {
   modelNotFound: 'CLAUDE_MODEL_NOT_FOUND',
   protocolError: 'CLAUDE_PROTOCOL_ERROR',
   rateLimited: 'CLAUDE_RATE_LIMITED',
+  toolProtocolError: 'CLAUDE_TOOL_PROTOCOL_ERROR',
+  toolTimeout: 'CLAUDE_TOOL_TIMEOUT',
   transportError: 'CLAUDE_TRANSPORT_ERROR',
   transportNotImplemented: 'CLAUDE_TRANSPORT_NOT_IMPLEMENTED',
   unsupportedInput: 'CLAUDE_UNSUPPORTED_INPUT',
@@ -53,6 +55,14 @@ export function protocolError(message: string, cause?: unknown): ClaudePluginErr
 
 export function transportError(message: string, cause?: unknown): ClaudePluginError {
   return claudeError(CLAUDE_ERROR_CODES.transportError, message, cause)
+}
+
+export function toolProtocolError(message: string, cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.toolProtocolError, message, cause)
+}
+
+export function toolTimeout(message: string, cause?: unknown): ClaudePluginError {
+  return claudeError(CLAUDE_ERROR_CODES.toolTimeout, message, cause)
 }
 
 export function transportNotImplemented(model: string): ClaudePluginError {

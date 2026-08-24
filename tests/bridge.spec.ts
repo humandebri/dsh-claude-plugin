@@ -194,12 +194,12 @@ describe('per-session Claude bridge', () => {
     expect(fixture.resolveExecutable).toHaveBeenCalledWith('claude', undefined, undefined)
     const sdkOptions = fixture.requests[0]?.options
     expect(sdkOptions).toMatchObject({
-      allowedTools: [],
+      allowedTools: ['mcp__dsh__*'],
       cwd: process.cwd(),
       hooks: {},
       includePartialMessages: true,
       managedSettings: { disableAllHooks: true },
-      mcpServers: {},
+      mcpServers: { dsh: expect.objectContaining({ type: 'sdk', name: 'dsh' }) },
       model: 'sonnet',
       pathToClaudeCodeExecutable: '/usr/local/bin/claude',
       permissionMode: 'dontAsk',
