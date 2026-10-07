@@ -18,6 +18,10 @@ import * as claudePlugin from '../src/index.js'
 import type { ClaudeQueryFactory } from '../src/index.js'
 
 class FakeSubprocessRuntime extends SubprocessRuntime {
+  override terminalEnvironment(): Promise<never> {
+    return Promise.reject(new Error('not exercised by scaffold'))
+  }
+
   override resolveExecutable(command: string): Promise<string> {
     return Promise.resolve(command)
   }
@@ -78,6 +82,7 @@ describe('DSH plugin registration', () => {
       { id: 'sonnet' },
       { id: 'opus' },
       { id: 'haiku' },
+      { id: 'claude-opus-5-5', name: 'Claude Opus 5.5' },
     ])
     const adapter = new claudePlugin.ClaudeCodeAdapter(
       claudePlugin.resolveConfig(),

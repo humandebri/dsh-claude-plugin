@@ -12,7 +12,7 @@ import {
 describe('Claude model aliases', () => {
   it('advertises the stable aliases in preferred order', () => {
     const models = modelCatalog('opus')
-    expect(models.map((model) => model.id)).toEqual(BUILTIN_MODEL_ALIASES)
+    expect(models.map((model) => model.id)).toEqual([...BUILTIN_MODEL_ALIASES, 'claude-opus-5-5'])
     expect(models[0]).toMatchObject({
       provider: PROVIDER_ID,
       id: 'default',
@@ -24,6 +24,11 @@ describe('Claude model aliases', () => {
   })
 
   it('maps only the default alias and preserves explicit Claude model names', () => {
+    expect(resolveClaudeModel('claude-opus-5-5', 'sonnet')).toBe('claude-opus-5-5')
+    expect(resolvedModelInfo(PROVIDER_ID, 'claude-opus-5-5', 'sonnet')).toMatchObject({
+      id: 'claude-opus-5-5',
+      name: 'Claude Opus 5.5',
+    })
     expect(resolveClaudeModel('default', 'sonnet')).toBe('sonnet')
     expect(() => resolveClaudeModel('default', 'default')).toThrow('concrete Claude model')
     expect(resolveClaudeModel('opus', 'sonnet')).toBe('opus')

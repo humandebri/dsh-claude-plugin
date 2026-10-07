@@ -323,6 +323,29 @@ describe('per-session Claude bridge', () => {
         source: { type: 'base64', media_type: 'image/png', data: 'iVBORw==' },
       },
     ])
+    const retiredImage: Message = {
+      ...imageMessage,
+      content: imageMessage.content.map((block) =>
+        block.type === 'image' ? { ...block, offloaded: true } : block,
+      ),
+    }
+    const replayState = chunks.find((chunk) => chunk.type === 'finish')?.replayState
+    const continued = await collect(
+      fixture.adapter.stream(
+        request(
+          [retiredImage, assistant('a1', 'seen', 'default', replayState), user('u2', 'continue')],
+          'image-session',
+        ),
+      ),
+    )
+    expect(continued.at(-1)).toMatchObject({ type: 'finish', reason: { kind: 'stop' } })
+    expect(fixture.queries).toHaveLength(2)
+    expect(fixture.queries[0]?.closed).toBe(true)
+    expect(readImageRequest).toHaveBeenCalledOnce()
+    expect(fixture.queries[1]?.inputs[0]?.message.content[0]).toMatchObject({
+      type: 'text',
+      text: expect.stringContaining('DSH degraded transcript replay'),
+    })
     expect(imageMessage.content[1]).toEqual({ type: 'image', attachment })
     await fixture.manager.dispose()
   })

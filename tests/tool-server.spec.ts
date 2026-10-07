@@ -1,5 +1,6 @@
+import type { ToolResult } from '../src/tool-result.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ToolCallBlock, ToolResultBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
+import type { ToolCallBlock, ToolSchema } from '@deepseek-ai/dsh-llm'
 import { Client } from '@modelcontextprotocol/sdk/client/index.js'
 import { InMemoryTransport } from '@modelcontextprotocol/sdk/inMemory.js'
 import {
@@ -22,9 +23,8 @@ function call(id: string, name: string, args: string): ToolCallBlock {
   return { type: 'tool-call', id: id as never, name, arguments: args }
 }
 
-function result(id: string, text: string, isError = false): ToolResultBlock {
+function result(id: string, text: string, isError = false): ToolResult {
   return {
-    type: 'tool-result',
     toolCallId: id as never,
     content: [{ type: 'text', text }],
     isError,

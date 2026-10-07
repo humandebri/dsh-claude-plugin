@@ -25,12 +25,6 @@ function requestCounts(options: GenerateOptions) {
     for (const block of message.content) {
       if (block.type === 'text') textCharacters += block.text.length
       else if (block.type === 'image') imageCount += 1
-      else if (block.type === 'tool-result') {
-        for (const result of block.content) {
-          if (result.type === 'text') textCharacters += result.text.length
-          else if (result.type === 'image') imageCount += 1
-        }
-      }
     }
   }
   return { textCharacters, imageCount }

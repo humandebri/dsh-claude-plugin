@@ -319,7 +319,11 @@ class SessionBridge {
 }
 
 function retryableBeforeObservation(error: unknown): boolean {
-  return !(error instanceof ClaudePluginError) || error.code === 'CLAUDE_TRANSPORT_ERROR'
+  return (
+    !(error instanceof ClaudePluginError) ||
+    error.code === 'CLAUDE_TRANSPORT_ERROR' ||
+    error.code === 'CLAUDE_COLD_REPLAY_UNSUPPORTED'
+  )
 }
 
 function bridgeKey(options: GenerateOptions): string | undefined {

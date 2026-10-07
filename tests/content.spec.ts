@@ -1,12 +1,13 @@
+import type { ToolResult } from '../src/tool-result.js'
 import { Buffer } from 'node:buffer'
 import { describe, expect, it, vi } from 'vitest'
 import type {
   ImageAttachmentRef,
   ImageMediaType,
-  ImageRequestPolicy,
+  ImageRequestTarget,
   RequestImageAttachment,
 } from '@deepseek-ai/dsh-attachment'
-import type { Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { Message } from '@deepseek-ai/dsh-llm'
 import {
   CLAUDE_MAX_ENCODED_IMAGE_BYTES,
   CLAUDE_MAX_IMAGE_DIMENSION,
@@ -44,7 +45,7 @@ class FixtureAttachments implements AttachmentReader {
   readonly readImageRequest = vi.fn(
     async (
       attachment: ImageAttachmentRef,
-      _policy: ImageRequestPolicy,
+      _policy: ImageRequestTarget,
     ): Promise<RequestImageAttachment> => {
       const data = mediaFixtures[attachment.mediaType]
       return {
@@ -67,13 +68,12 @@ function user(content: Message['content']): Message {
   return { id: 'user-image' as never, role: 'user', source: { kind: 'user' }, content }
 }
 
-function toolResult(content: unknown[], isError?: boolean): ToolResultBlock {
+function toolResult(content: unknown[], isError?: boolean): ToolResult {
   return {
-    type: 'tool-result',
     toolCallId: 'toolu_fixture' as never,
     content,
     ...(isError === undefined ? {} : { isError }),
-  } as ToolResultBlock
+  } as ToolResult
 }
 
 describe('Claude rich-content encoding', () => {
@@ -103,7 +103,8 @@ describe('Claude rich-content encoding', () => {
         expect.objectContaining({ mediaType }),
         expect.objectContaining({
           maxBytes: CLAUDE_MAX_ENCODED_IMAGE_BYTES,
-          maxPixels: 64_000_000,
+          width: 1,
+          height: 1,
         }),
         undefined,
       )

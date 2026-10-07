@@ -28,7 +28,7 @@
   "engines": {
     "node": "^22.19.0 || >=24.0.0"
   },
-  "packageManager": "npm@11.7.0",
+  "packageManager": "pnpm@11.19.0",
   "repository": {
     "type": "git",
     "url": "git+https://github.com/snowan/dsh-claude-plugin.git"
@@ -47,33 +47,33 @@
     }
   },
   "scripts": {
-    "benchmark": "npm run build && node scripts/benchmark.mjs --preflight",
-    "benchmark:list": "npm run build && node scripts/benchmark.mjs --list",
+    "benchmark": "pnpm run build && node scripts/benchmark.mjs --preflight",
+    "benchmark:list": "pnpm run build && node scripts/benchmark.mjs --list",
     "benchmark:list:built": "node scripts/benchmark.mjs --list",
-    "benchmark:live": "npm run build && node scripts/benchmark.mjs --live",
+    "benchmark:live": "pnpm run build && node scripts/benchmark.mjs --live",
     "build": "tsc -p tsconfig.build.json",
-    "check": "npm run format:check && npm run lint && npm run typecheck && npm run test:coverage && npm run build && npm run benchmark:list:built && npm run publint && npm run pack:check && npm run check:authorship && npm run check:docs",
+    "check": "pnpm run format:check && pnpm run lint && pnpm run typecheck && pnpm run test:coverage && pnpm run build && pnpm run benchmark:list:built && pnpm run publint && pnpm run pack:check && pnpm run check:authorship && pnpm run check:docs",
     "check:authorship": "node scripts/check-authorship.mjs",
     "check:docs": "node scripts/check-doc-links.mjs",
     "format": "prettier --write src tests scripts/*.mjs bench/*.json *.json *.yml *.ts .github/workflows/*.yml",
     "format:check": "prettier --check src tests scripts/*.mjs bench/*.json *.json *.yml *.ts .github/workflows/*.yml",
     "lint": "oxlint --deny-warnings src tests scripts vitest.config.ts",
     "pack:check": "node scripts/check-pack.mjs",
-    "prepare": "npm run build",
+    "prepare": "pnpm run build",
     "publint": "node scripts/run-publint.mjs",
-    "smoke:claude": "npm run build && node scripts/smoke-claude.mjs",
+    "smoke:claude": "pnpm run build && node scripts/smoke-claude.mjs",
     "test": "vitest run",
-    "test:profile": "npm run build && node scripts/profile-install-e2e.mjs",
-    "test:web": "npm run build && node scripts/web-e2e.mjs",
-    "test:web:live": "npm run build && node scripts/web-e2e.mjs --live",
+    "test:profile": "pnpm run build && node scripts/profile-install-e2e.mjs",
+    "test:web": "pnpm run build && node scripts/web-e2e.mjs",
+    "test:web:live": "pnpm run build && node scripts/web-e2e.mjs --live",
     "test:coverage": "vitest run --coverage",
     "typecheck": "tsc -p tsconfig.json --noEmit"
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": ">=0.1.1-rc.2 <0.2.0",
-    "@deepseek-ai/dsh-llm": ">=0.1.1-rc.2 <0.2.0",
-    "@deepseek-ai/dsh-subprocess": ">=0.1.1-rc.2 <0.2.0"
+    "@deepseek-ai/dsh-attachment": ">=0.1.7-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.1 <0.2.0",
+    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.1 <0.2.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.241",
@@ -82,13 +82,13 @@
     "yaml": "2.9.0"
   },
   "devDependencies": {
-    "@deepseek-ai/cordis": "4.0.1",
-    "@deepseek-ai/dsh-attachment": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-invariants": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-llm": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-subprocess": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-subprocess-local": "0.1.1-rc.2",
-    "@deepseek-ai/dsh-timeout": "0.1.1-rc.2",
+    "@deepseek-ai/cordis": "link:../../core/vendor/cordis",
+    "@deepseek-ai/dsh-attachment": "link:../../core/packages/attachment/attachment",
+    "@deepseek-ai/dsh-invariants": "link:../../core/packages/runtime-diagnostics/invariants",
+    "@deepseek-ai/dsh-llm": "link:../../core/packages/llm/llm",
+    "@deepseek-ai/dsh-subprocess": "link:../../core/packages/subprocess/subprocess",
+    "@deepseek-ai/dsh-subprocess-local": "link:../../core/packages/subprocess/subprocess-local",
+    "@deepseek-ai/dsh-timeout": "link:../../core/packages/util/timeout",
     "@types/node": "^22.20.0",
     "@vitest/coverage-v8": "^4.1.8",
     "oxlint": "1.76.0",

@@ -207,15 +207,10 @@ function assistantTool(replayState?: unknown): Message {
 function toolResult(): Message {
   return {
     id: 'r1' as never,
-    role: 'user',
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId: 'toolu_read_1' as never,
-        content: [{ type: 'text', text: 'fixture-value' }],
-        isError: false,
-      },
-    ],
+    role: 'tool',
+    toolCallId: 'toolu_read_1' as never,
+    content: [{ type: 'text', text: 'fixture-value' }],
+    isError: false,
     source: { kind: 'tool', callId: 'toolu_read_1' as never },
   }
 }
@@ -423,7 +418,16 @@ describe('DSH-owned MCP pause and resume', () => {
     const coldManager = new BridgeManager(subprocess, config, coldFactory)
     const coldAdapter = new ClaudeCodeAdapter(config, coldManager)
     const chunks = await collect(
-      coldAdapter.stream(request([user(), assistantTool(finish.replayState), toolResult()])),
+      coldAdapter.stream(
+        request([
+          user(),
+          assistantTool(finish.replayState),
+          {
+            ...user(),
+            id: 'u2' as never,
+          },
+        ]),
+      ),
     )
     expect(chunks).toEqual([
       {

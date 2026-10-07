@@ -1,5 +1,6 @@
+import type { ToolResult } from '../src/tool-result.js'
 import { afterEach, describe, expect, it, vi } from 'vitest'
-import type { ToolCallBlock, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ToolCallBlock } from '@deepseek-ai/dsh-llm'
 import {
   canonicalToolJson,
   MCP_HANDLER_REGISTRATION_TIMEOUT_MS,
@@ -12,9 +13,8 @@ function call(id: string, name: string, args = '{}'): ToolCallBlock {
   return { type: 'tool-call', id: id as never, name, arguments: args }
 }
 
-function result(id: string, text = id, isError = false): ToolResultBlock {
+function result(id: string, text = id, isError = false): ToolResult {
   return {
-    type: 'tool-result',
     toolCallId: id as never,
     content: [{ type: 'text', text }],
     isError,

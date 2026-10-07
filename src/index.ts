@@ -2,6 +2,7 @@ import { isAbsolute } from 'node:path'
 import type { Context } from '@deepseek-ai/cordis'
 import z from '@deepseek-ai/schemastery'
 import { LlmAdapter } from '@deepseek-ai/dsh-llm'
+import { offloadedImageText, projectOffloadedImages } from '@deepseek-ai/dsh-llm'
 import type {
   GenerateOptions,
   LlmModelInfo,
@@ -199,6 +200,10 @@ export class ClaudeCodeAdapter extends LlmAdapter {
   }
 
   override async *stream(options: GenerateOptions): AsyncIterable<StreamChunk> {
+    options = {
+      ...options,
+      messages: [...projectOffloadedImages(options.messages, (ref) => offloadedImageText(ref))],
+    }
     const model = resolveClaudeModel(options.model, this.config.defaultModel)
     let finished = false
     try {

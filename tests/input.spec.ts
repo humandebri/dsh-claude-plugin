@@ -4,10 +4,14 @@ import { assertSdkUserInput, LiveInputCursor } from '../src/input.js'
 
 function message(
   id: string,
-  role: Message['role'],
+  role: 'user' | 'assistant',
   text: string,
   source: Message['source'] = { kind: 'user' },
 ): Message {
+  if (role === 'assistant') {
+    if (source.kind !== 'model') throw new Error('assistant fixture requires a model source')
+    return { id: id as never, role, content: [{ type: 'text', text }], source }
+  }
   return {
     id: id as never,
     role,
@@ -175,21 +179,20 @@ describe('live SDK input cursor', () => {
     }
     const toolResult: Message = {
       id: 'r1' as never,
-      role: 'user',
-      content: [
-        {
-          type: 'tool-result',
-          toolCallId: 'toolu_read_1' as never,
-          content: [{ type: 'text', text: 'fixture-value' }],
-          isError: false,
-        },
-      ],
+      role: 'tool',
+      toolCallId: 'toolu_read_1' as never,
+      content: [{ type: 'text', text: 'fixture-value' }],
+      isError: false,
       source: { kind: 'tool', callId: 'toolu_read_1' as never },
     }
     expect(await cursor.prepareStep(options([...first, assistant, toolResult]))).toEqual({
       kind: 'tool-results',
-      results: toolResult.content,
+      results: [toolResult],
     })
+    const followup = message('u2', 'user', 'Use the newly requested design instead.')
+    await expect(
+      cursor.prepareStep(options([...first, assistant, toolResult, followup])),
+    ).rejects.toThrow(expect.objectContaining({ code: 'CLAUDE_TRANSPORT_ERROR' }))
     await expect(cursor.prepare(options([...first, assistant, toolResult]))).rejects.toThrow(
       /resume/,
     )
@@ -214,20 +217,14 @@ describe('live SDK input cursor', () => {
     }
     const valid: Message = {
       id: 'r1' as never,
-      role: 'user',
-      content: [
-        {
-          type: 'tool-result',
-          toolCallId: 'toolu_1' as never,
-          content: [{ type: 'text', text: 'ok' }],
-        },
-      ],
+      role: 'tool',
+      toolCallId: 'toolu_1' as never,
+      content: [{ type: 'text', text: 'ok' }],
       source: { kind: 'tool', callId: 'toolu_1' as never },
     }
     for (const invalid of [
       { ...valid, role: 'assistant' as const },
       { ...valid, source: { kind: 'user' as const } },
-      { ...valid, content: [] },
       { ...valid, source: { kind: 'tool' as const, callId: 'other' as never } },
     ]) {
       await expect(

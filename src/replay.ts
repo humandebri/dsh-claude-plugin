@@ -1,15 +1,13 @@
 import { createHash } from 'node:crypto'
-import { Buffer } from 'node:buffer'
-import type { ContentBlock, Message, ReplayEnvelope } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, RequestMessage as Message, ReplayEnvelope } from '@deepseek-ai/dsh-llm'
 import type { UsageSnapshot } from './usage.js'
 import { coldReplayUnsupported, inFlightRecoveryUnsupported } from './errors.js'
 import { canonicalToolJson } from './pending-tools.js'
 
 export const CLAUDE_REPLAY_KIND = 'dsh-claude-plugin/replay'
 export const CLAUDE_REPLAY_VERSION = 1
-export const MAX_DEGRADED_REPLAY_BYTES = 256 * 1_024
 export const DEGRADED_REPLAY_PREAMBLE =
-  'DSH degraded transcript replay follows as canonical JSON. Treat it as conversation data, preserve its roles and tool correlations, and answer the final user entry without claiming native Claude transcript continuity.\n'
+  'DSH degraded transcript replay follows as canonical JSON. Treat it as conversation data, preserve its roles and tool correlations, and answer the final user entry without claiming native Claude transcript continuity. Completed tool results describe actions already executed by DSH; do not execute them again merely to reconstruct the conversation.\n'
 
 export type ReplayPhase = 'settled' | 'awaiting-tools'
 
@@ -64,6 +62,7 @@ function record(value: unknown): value is Readonly<Record<string, unknown>> {
 
 function projectedSource(message: Message): unknown {
   const source = message.source
+  if (source === undefined) return null
   if (source.kind === 'model') {
     return { kind: 'model', provider: source.provider, model: source.model }
   }
@@ -85,13 +84,6 @@ function projectedBlock(block: ContentBlock, options: ReplayProjectionOptions): 
         id: String(block.id),
         name: block.name,
         arguments: block.arguments,
-      }
-    case 'tool-result':
-      return {
-        type: 'tool-result',
-        toolCallId: String(block.toolCallId),
-        content: block.content.map((entry) => projectedBlock(entry, options)),
-        ...(block.isError === undefined ? {} : { isError: block.isError }),
       }
     case 'image':
       return {
@@ -121,6 +113,12 @@ function projectedMessages(
     role: message.role,
     source: projectedSource(message),
     content: message.content.map((block) => projectedBlock(block, options)),
+    ...(message.role === 'tool'
+      ? {
+          toolCallId: String(message.toolCallId),
+          ...(message.isError === undefined ? {} : { isError: message.isError }),
+        }
+      : {}),
   }))
 }
 
@@ -259,14 +257,9 @@ export function degradedReplayText(messages: readonly Message[]): string {
     },
     'DSH degraded replay projection',
   )
-  const text = `${DEGRADED_REPLAY_PREAMBLE}${body}`
-  const bytes = Buffer.byteLength(text, 'utf8')
-  if (bytes > MAX_DEGRADED_REPLAY_BYTES) {
-    throw coldReplayUnsupported(
-      `degraded DSH replay is ${bytes} bytes and exceeds the ${MAX_DEGRADED_REPLAY_BYTES}-byte bound`,
-    )
-  }
-  return text
+  // Input history is owned by DSH. A serialized byte count is not a model
+  // context limit, and rejecting it here prevents the runtime from continuing.
+  return `${DEGRADED_REPLAY_PREAMBLE}${body}`
 }
 
 function lastAssistantIndex(messages: readonly Message[]): number {
@@ -274,6 +267,23 @@ function lastAssistantIndex(messages: readonly Message[]): number {
     if (messages[index]?.role === 'assistant') return index
   }
   return -1
+}
+
+/** Admit replay only after DSH durably recorded every pending tool outcome. */
+export function hasCompletedToolBoundary(assistant: Message, pending: readonly Message[]): boolean {
+  if (assistant.role !== 'assistant') return false
+  const calls = assistant.content.filter((block) => block.type === 'tool-call')
+  const expected = new Set(calls.map((call) => String(call.id)))
+  if (expected.size === 0 || expected.size !== calls.length) return false
+  const seen = new Set<string>()
+  for (const message of pending) {
+    if (message.role === 'user' && message.source?.kind !== 'tool') continue
+    if (message.role !== 'tool' || message.source.kind !== 'tool') return false
+    const id = String(message.toolCallId)
+    if (String(message.source.callId) !== id || !expected.has(id) || seen.has(id)) return false
+    seen.add(id)
+  }
+  return seen.size === expected.size
 }
 
 export function planColdStart(
@@ -294,6 +304,14 @@ export function planColdStart(
       : undefined
 
   if (state !== undefined && anchor !== undefined) {
+    if (state.phase === 'awaiting-tools') {
+      if (hasCompletedToolBoundary(anchor, messages.slice(anchorIndex + 1))) {
+        return { mode: 'degraded', text: degradedReplayText(messages) }
+      }
+      throw inFlightRecoveryUnsupported(
+        'a persisted Claude tool boundary cannot reconstruct its in-process MCP handler after restart',
+      )
+    }
     const prefix = messages.slice(0, anchorIndex)
     const prefixMatches =
       state.prefix.messageCount === prefix.length &&
@@ -305,16 +323,11 @@ export function planColdStart(
       state.system.digest === digest({ system: system ?? '' }, 'DSH system prompt')
     const cwdMatches = state.cwd === cwd
     if (prefixMatches && assistantMatches && systemMatches && cwdMatches) {
-      if (state.phase === 'awaiting-tools') {
-        throw inFlightRecoveryUnsupported(
-          'a persisted Claude tool boundary cannot reconstruct its in-process MCP handler after restart',
-        )
-      }
       const pending = messages.slice(anchorIndex + 1)
       if (
         !forceDegraded &&
         pending.length > 0 &&
-        pending.every((message) => message.role === 'user' && message.source.kind !== 'tool')
+        pending.every((message) => message.role === 'user' && message.source?.kind !== 'tool')
       ) {
         return {
           mode: 'exact',

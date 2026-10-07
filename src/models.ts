@@ -96,6 +96,8 @@ function displayName(model: string): string {
       return 'Claude Opus'
     case 'haiku':
       return 'Claude Haiku'
+    case 'claude-opus-5-5':
+      return 'Claude Opus 5.5'
     default:
       return model
   }
@@ -103,14 +105,16 @@ function displayName(model: string): string {
 
 export function modelCatalog(defaultModel: string): readonly LlmModelInfo[] {
   const resolvedDefault = resolveClaudeModel('default', defaultModel)
-  const entries: LlmModelInfo[] = BUILTIN_MODEL_ALIASES.map((id) => ({
+  const entries: LlmModelInfo[] = [...BUILTIN_MODEL_ALIASES, 'claude-opus-5-5'].map((id) => ({
     provider: PROVIDER_ID,
     id,
     name: id === 'default' ? `${displayName(resolvedDefault)} (default)` : displayName(id),
     description:
       id === 'default'
         ? `Resolves to the configured Claude model ${resolvedDefault}`
-        : `Claude Code ${id} alias`,
+        : id === 'claude-opus-5-5'
+          ? 'Claude Opus 5.5 — pinned model version'
+          : `Claude Code ${id} alias`,
     inputModalities: ['text', 'image'],
   }))
   return Object.freeze(entries.map((entry) => Object.freeze(entry)))

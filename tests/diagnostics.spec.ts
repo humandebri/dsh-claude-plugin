@@ -14,15 +14,10 @@ const environmentSecret = 'ENVIRONMENT_SECRET_a04d'
 function options(): GenerateOptions {
   const result: Message = {
     id: 'tool-result' as never,
-    role: 'user',
+    role: 'tool',
     source: { kind: 'tool', callId: 'toolu_1' as never },
-    content: [
-      {
-        type: 'tool-result',
-        toolCallId: 'toolu_1' as never,
-        content: [{ type: 'text', text: toolSecret }],
-      },
-    ],
+    toolCallId: 'toolu_1' as never,
+    content: [{ type: 'text', text: toolSecret }],
   }
   return {
     provider: 'claude-code',

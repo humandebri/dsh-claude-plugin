@@ -5,7 +5,6 @@ import {
   createReplayEnvelope,
   DEGRADED_REPLAY_PREAMBLE,
   degradedReplayText,
-  MAX_DEGRADED_REPLAY_BYTES,
   messageFingerprint,
   planColdStart,
 } from '../src/replay.js'
@@ -107,15 +106,10 @@ describe('durable Claude replay planning', () => {
     const toolAssistant = assistant('a1', [call])
     const failedTool: Message = {
       id: 'r1' as never,
-      role: 'user',
-      content: [
-        {
-          type: 'tool-result',
-          toolCallId: 'toolu_read_1' as never,
-          content: [{ type: 'text', text: 'not found' }],
-          isError: true,
-        },
-      ],
+      role: 'tool',
+      toolCallId: 'toolu_read_1' as never,
+      content: [{ type: 'text', text: 'not found' }],
+      isError: true,
       source: { kind: 'tool', callId: 'toolu_read_1' as never },
     }
     const finalContent: ContentBlock[] = [{ type: 'text', text: 'The fixture is missing.' }]
@@ -186,11 +180,25 @@ describe('durable Claude replay planning', () => {
     expect(() =>
       planColdStart([u1, pending, user('u2', 'continue')], system, cwd, true),
     ).toThrowError(expect.objectContaining({ code: 'CLAUDE_IN_FLIGHT_RECOVERY_UNSUPPORTED' }))
+    const result: Message = {
+      id: 'r1' as never,
+      role: 'tool',
+      toolCallId: 'toolu_1' as never,
+      source: { kind: 'tool', callId: 'toolu_1' as never },
+      content: [{ type: 'text', text: 'Recorded tool outcome' }],
+    }
+    const replay = planColdStart([u1, pending, result, user('u2', 'New instruction')], system, cwd)
+    expect(replay.mode).toBe('degraded')
+    if (replay.mode === 'degraded') {
+      expect(replay.text).toContain('Recorded tool outcome')
+      expect(replay.text).toContain('New instruction')
+    }
+    expect(() =>
+      planColdStart([u1, pending, result, result, user('u2', 'continue')], system, cwd),
+    ).toThrowError(expect.objectContaining({ code: 'CLAUDE_IN_FLIGHT_RECOVERY_UNSUPPORTED' }))
   })
 
-  it('bounds degraded history and preserves durable image descriptors without bytes', () => {
-    const oversized = user('large', 'x'.repeat(MAX_DEGRADED_REPLAY_BYTES))
-    expect(() => degradedReplayText([oversized])).toThrow(/exceeds/)
+  it('preserves durable image descriptors without bytes', () => {
     const image: Message = {
       ...user('image', 'unused'),
       content: [
@@ -210,6 +218,32 @@ describe('durable Claude replay planning', () => {
     expect(replay).toContain('sha256:fixture')
     expect(replay).toContain('"mediaType":"image/png"')
     expect(replay).not.toContain('base64')
+  })
+
+  it('replays histories above 256 KiB without dropping tool results or the latest instruction', () => {
+    const output = '診断用のツール結果。'.repeat(30000)
+    const toolResult: Message = {
+      id: 'large-result' as never,
+      role: 'tool',
+      toolCallId: 'toolu_large' as never,
+      source: { kind: 'tool', callId: 'toolu_large' as never },
+      content: [{ type: 'text', text: output }],
+    }
+    const replay = degradedReplayText([
+      user('first', 'Read the diagnostic'),
+      toolResult,
+      user('last', 'Follow the latest instruction'),
+    ])
+    expect(Buffer.byteLength(replay, 'utf8')).toBeGreaterThan(262144)
+    const body = JSON.parse(replay.slice(DEGRADED_REPLAY_PREAMBLE.length))
+    expect(body.messages[1]).toMatchObject({
+      role: 'tool',
+      toolCallId: 'toolu_large',
+      content: [{ type: 'text', text: output }],
+    })
+    expect(body.messages[2].content).toEqual([
+      { type: 'text', text: 'Follow the latest instruction' },
+    ])
   })
 
   it('uses a fresh query for user-only history and omits replay state without safe UUIDs', () => {

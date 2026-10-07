@@ -2,7 +2,8 @@ import { Buffer } from 'node:buffer'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
 import type AttachmentStore from '@deepseek-ai/dsh-attachment'
 import type { ImageAttachmentRef, ImageMediaType } from '@deepseek-ai/dsh-attachment'
-import type { ContentBlock, Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, RequestMessage as Message } from '@deepseek-ai/dsh-llm'
+import type { ToolResult } from './tool-result.js'
 import { CallToolResultSchema, type CallToolResult } from '@modelcontextprotocol/sdk/types.js'
 import { toolProtocolError, unsupportedInput } from './errors.js'
 import { canonicalToolJson } from './json.js'
@@ -42,7 +43,6 @@ function imageRefs(blocks: readonly ContentBlock[]): ImageAttachmentRef[] {
   const images: ImageAttachmentRef[] = []
   for (const block of blocks) {
     if (block.type === 'image') images.push(block.attachment)
-    else if (block.type === 'tool-result') images.push(...imageRefs(block.content))
   }
   return images
 }
@@ -110,7 +110,7 @@ export class ClaudeContentEncoder {
     )
   }
 
-  assertToolResults(results: readonly ToolResultBlock[]): void {
+  assertToolResults(results: readonly ToolResult[]): void {
     this.#assertBatch(
       results.flatMap((result) => imageRefs(result.content)),
       'DSH tool-result batch',
@@ -124,10 +124,20 @@ export class ClaudeContentEncoder {
         `DSH attachment media type ${JSON.stringify(ref.mediaType)} is unavailable`,
       )
     }
+    const scale = Math.min(
+      1,
+      CLAUDE_MAX_IMAGE_DIMENSION / ref.width,
+      CLAUDE_MAX_IMAGE_DIMENSION / ref.height,
+      Math.sqrt(
+        Math.min(CLAUDE_MAX_IMAGE_PIXELS, attachments.imageLimits.maxImagePixels) /
+          (ref.width * ref.height),
+      ),
+    )
     const request = await attachments.readImageRequest(
       ref,
       {
-        maxPixels: Math.min(CLAUDE_MAX_IMAGE_PIXELS, attachments.imageLimits.maxImagePixels),
+        width: Math.max(1, Math.floor(ref.width * scale)),
+        height: Math.max(1, Math.floor(ref.height * scale)),
         maxBytes: Math.min(CLAUDE_MAX_ENCODED_IMAGE_BYTES, attachments.imageLimits.maxImageBytes),
       },
       signal,
@@ -166,7 +176,7 @@ export class ClaudeContentEncoder {
   }
 
   async userMessage(message: Message, signal?: AbortSignal): Promise<SDKUserMessage> {
-    if (message.role !== 'user' || message.source.kind === 'tool') {
+    if (message.role !== 'user' || message.source?.kind === 'tool') {
       throw unsupportedInput('only non-tool user messages can enter the live Claude prompt stream')
     }
     this.#assertBatch(imageRefs(message.content), `message ${JSON.stringify(String(message.id))}`)
@@ -233,7 +243,7 @@ export class ClaudeContentEncoder {
     }
   }
 
-  async toolResult(result: ToolResultBlock, signal?: AbortSignal): Promise<CallToolResult> {
+  async toolResult(result: ToolResult, signal?: AbortSignal): Promise<CallToolResult> {
     this.#assertBatch(imageRefs(result.content), 'DSH tool result')
     const content: CallToolResult['content'] = []
     let structuredContent: Record<string, unknown> | undefined

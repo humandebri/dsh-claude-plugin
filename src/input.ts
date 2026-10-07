@@ -1,10 +1,17 @@
 import { cwd as processCwd } from 'node:process'
 import type { SDKUserMessage } from '@anthropic-ai/claude-agent-sdk'
-import type { ContentBlock, GenerateOptions, Message, ToolResultBlock } from '@deepseek-ai/dsh-llm'
+import type { ContentBlock, GenerateOptions, RequestMessage as Message } from '@deepseek-ai/dsh-llm'
+import type { ToolResult } from './tool-result.js'
 import { ClaudeContentEncoder } from './content.js'
-import { CLAUDE_ERROR_CODES, claudeError, protocolError, unsupportedInput } from './errors.js'
+import {
+  CLAUDE_ERROR_CODES,
+  claudeError,
+  protocolError,
+  transportError,
+  unsupportedInput,
+} from './errors.js'
 import { PROVIDER_ID } from './models.js'
-import { planColdStart } from './replay.js'
+import { hasCompletedToolBoundary, planColdStart } from './replay.js'
 
 function contentEqual(left: readonly ContentBlock[], right: readonly ContentBlock[]): boolean {
   return JSON.stringify(left) === JSON.stringify(right)
@@ -39,7 +46,7 @@ export type LiveInputPlan =
       readonly messages: SDKUserMessage[]
       readonly start?: ClaudeStartPlan
     }
-  | { readonly kind: 'tool-results'; readonly results: ToolResultBlock[] }
+  | { readonly kind: 'tool-results'; readonly results: ToolResult[] }
 
 export interface PrepareStepOptions {
   readonly forceDegraded?: boolean
@@ -56,16 +63,11 @@ export function assertSdkUserInput(message: SDKUserMessage): void {
   }
 }
 
-function toolResult(message: Message): ToolResultBlock {
-  if (
-    message.role !== 'user' ||
-    message.source.kind !== 'tool' ||
-    message.content.length !== 1 ||
-    message.content[0]?.type !== 'tool-result'
-  ) {
+function toolResult(message: Message): ToolResult {
+  if (message.role !== 'tool' || message.source.kind !== 'tool') {
     throw unsupportedInput('a Claude tool boundary accepts only DSH tool-result messages')
   }
-  const result = message.content[0]
+  const result = message
   if (String(result.toolCallId) !== String(message.source.callId)) {
     throw unsupportedInput('DSH tool-result message correlation is unsupported')
   }
@@ -131,7 +133,7 @@ export class LiveInputCursor {
       if (options.messages.length === 0) {
         throw unsupportedInput('Claude generation requires new user content')
       }
-      if (options.messages.at(-1)?.role !== 'user') {
+      if (!['user', 'tool'].includes(options.messages.at(-1)?.role ?? '')) {
         throw unsupportedInput('Claude generation requires new user content after prior history')
       }
       const cold = planColdStart(
@@ -164,7 +166,24 @@ export class LiveInputCursor {
     const pending = options.messages.slice(offset)
     if (pending.length === 0) throw unsupportedInput('Claude generation requires new user content')
     if (this.#assistant?.content.some((block) => block.type === 'tool-call') === true) {
-      return { kind: 'tool-results', results: pending.map(toolResult) }
+      const results: ToolResult[] = []
+      const followups: Message[] = []
+      for (const message of pending) {
+        if (message.role === 'user' && message.source?.kind !== 'tool') followups.push(message)
+        else results.push(toolResult(message))
+      }
+      this.encoder.assertMessages(followups)
+      if (followups.length > 0) {
+        const assistant = options.messages[offset - 1]
+        if (assistant === undefined || !hasCompletedToolBoundary(assistant, pending)) {
+          throw unsupportedInput('Claude continuation is missing or repeats pending tool results')
+        }
+        // Restart from DSH's complete history. Sending a second SDK query while
+        // MCP is parked interrupts the original turn; putting user instructions
+        // into tool output loses their conversation role.
+        throw transportError('Claude continuation requires replay to apply added user messages')
+      }
+      return { kind: 'tool-results', results }
     }
     this.encoder.assertMessages(pending)
     return {
