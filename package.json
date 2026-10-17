@@ -71,20 +71,19 @@
   },
   "peerDependencies": {
     "@deepseek-ai/cordis": "^4.0.1",
-    "@deepseek-ai/dsh-attachment": ">=0.1.7-rc.1 <0.2.0",
-    "@deepseek-ai/dsh-llm": ">=0.1.7-rc.1 <0.2.0",
-    "@deepseek-ai/dsh-subprocess": ">=0.1.7-rc.1 <0.2.0"
+    "@deepseek-ai/dsh-attachment": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-llm": ">=0.2.1-rc.2 <0.3.0",
+    "@deepseek-ai/dsh-subprocess": ">=0.2.1-rc.2 <0.3.0"
   },
   "dependencies": {
     "@anthropic-ai/claude-agent-sdk": "0.3.241",
-    "@deepseek-ai/schemastery": "^3.18.1",
+    "@deepseek-ai/schemastery": "link:../../core/vendor/schemastery",
     "@modelcontextprotocol/sdk": "1.30.0",
     "yaml": "2.9.0"
   },
   "devDependencies": {
     "@deepseek-ai/cordis": "link:../../core/vendor/cordis",
     "@deepseek-ai/dsh-attachment": "link:../../core/packages/attachment/attachment",
-    "@deepseek-ai/dsh-invariants": "link:../../core/packages/runtime-diagnostics/invariants",
     "@deepseek-ai/dsh-llm": "link:../../core/packages/llm/llm",
     "@deepseek-ai/dsh-subprocess": "link:../../core/packages/subprocess/subprocess",
     "@deepseek-ai/dsh-subprocess-local": "link:../../core/packages/subprocess/subprocess-local",
